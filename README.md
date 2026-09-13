@@ -80,6 +80,41 @@ You need an OpenRouter key. One key gives access to all the models.
 export OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
+## How to get the dictionary
+
+The vocabulary part of the score needs a list of the approved words. The
+standard contains that list. You must get your own copy. This project does not
+supply one.
+
+### Procedure
+
+1. Open the downloads page at https://www.asd-ste100.org/STE_downloads.html
+2. Click **Fill in the request form**. The form is at
+   https://forms.gle/7gqWUtj2UK2CBTBv5
+3. Complete the form. The STEMG asks for your name, your email address, and
+   your organization.
+4. Send the form. The STEMG sends the standard to your email address. There is
+   no charge.
+5. Open the PDF. Find Part 2. Part 2 is the dictionary.
+6. Make a text file from the approved entries. Put one word on each line. Use
+   lower case. Do not include the words that the standard does not approve.
+7. Save the file. Give it the name `approved_words.txt`.
+8. Add `approved_words.txt` to your `.gitignore` file. The list comes from the
+   standard. You must not publish it.
+9. Open `ste_retention.py`. Set `APPROVED_WORDS_FILE` to the path of your file.
+
+### Two cautions
+
+The standard permits technical names and technical verbs that are not in the
+dictionary. These are words for your own products and processes. A plain word
+list cannot find them. The score will therefore mark some correct words as
+wrong. The error applies equally to all four prompt variants, so it does not
+change the comparison. It does change the level of the scores.
+
+The standard is a specification, not a word list. The dictionary is one part of
+it. The 53 writing rules are the other part. This project tests only some of
+those rules. Read the limits section before you use the scores.
+
 ## How to run the experiment
 
 1. Open `ste_retention.py` in a text editor.
@@ -131,10 +166,16 @@ holds the session number, the model, the variant, the depth, the score, the
 metrics, the judge value, and the full text. The script writes each line
 immediately. A failure does not lose the earlier data.
 
-**Approved words.** The ASD-STE100 dictionary has copyright protection. This
-project does not include it. Set `APPROVED_WORDS_FILE` to the path of a word
-list if you have one. If you do not set it, the vocabulary part of the score
-drops out. The other parts continue to work.
+**Approved words.** ASD owns the copyright and the trademark of ASD-STE100.
+This project does not include the dictionary. You must not reprint the standard
+in part or in whole in your own documentation.
+
+You can get your own copy at no cost. Request Issue 9 from the STEMG. Refer to
+the *License* section below. Then make a word list for your own use. Keep the
+list out of the repository.
+
+Set `APPROVED_WORDS_FILE` to the path of your word list. If you do not set it,
+the vocabulary part of the score drops out. The other parts continue to work.
 
 ### `make_leaderboard.py`
 
@@ -196,7 +237,56 @@ experiment.
 The per-model results use no correction for multiple comparisons. Read them as
 an indication. Do not read them as a ranking.
 
-## License and data
+## The standard
+
+ASD owns ASD-STE100. It is a copyright and a European Union trademark
+(No. 017966390) of ASD, Brussels, Belgium. The current version is Issue 9,
+January 2025.
+
+The standard costs nothing. Request an official copy from the STEMG:
+
+- Request form: https://forms.gle/7gqWUtj2UK2CBTBv5
+- Downloads page: https://www.asd-ste100.org/STE_downloads.html
+
+Older pages tell you to buy the standard from a distributor. That information is
+no longer correct.
+
+### What you can do
+
+You can use the standard to write documentation. You do not need permission.
+
+### What you must not do
+
+- Do not reprint the standard, in part or in whole, in your own documentation.
+- Do not change the standard.
+- Do not use the ASD logo, copyright, or trademark in your material.
+- Do not say that ASD approves or certifies this project. ASD does not approve
+  or certify any software. ASD applies the same policy to AI tools.
+
+If you make a product from the standard, such as a checker, you must first ask
+ASD for permission. Write to stemg@asd-ste100.org.
+
+This project measures how models behave. It is not a checker and it is not a
+product. It gives no STE certification.
+
+## Related work
+
+The STEMG has an Artificial Intelligence Task Team (AITT). The team released a
+white paper in June 2026.
+
+https://www.asd-ste100.org/assets/files/WhitePaper-ASD-STE100_and_AI.pdf
+
+The white paper makes two points that apply to this project. First, AI text can
+look correct but can still break the rules of the standard. Second, the STEMG
+lists an evaluation framework for AI performance in STE writing as future work
+that it wants.
+
+If you publish results from this project, tell the STEMG. Their address is
+stemg@asd-ste100.org.
+
+## Data
 
 Publish the raw replies with the results. A leaderboard has value only when
 another person can check it.
+
+Do not publish your approved word list. It comes from the standard.
