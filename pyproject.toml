@@ -1,6 +1,6 @@
 [tool.ruff]
 exclude = ["originals"]
-target-version = "py314"
+target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]

@@ -54,6 +54,10 @@ class ResearchConfig:
             raise ValueError("Probe depths must be unique positive values in ascending order.")
         if type(self.depths[-1]) is not int or not 1 <= self.depths[-1] <= MAX_RESEARCH_DEPTH:
             raise ValueError("Research depth is out of range.")
+        # The current protocol presents each pool entry at most once per session.
+        # A future protocol must be versioned before it may deliberately repeat prompts.
+        if self.depths[-1] > len(PROMPT_POOL):
+            raise ValueError("Research depth exceeds the non-repeating prompt pool.")
         if self.judge_model is not None and self.judge_model not in ALLOWED_MODELS:
             raise ValueError("The judge model must be supported.")
         if self.budget_usd <= 0 or self.provider_timeout <= 0 or self.judge_timeout <= 0:
@@ -75,9 +79,13 @@ class ResearchConfig:
 
 
 def prompt_sequence(seed: int, session_id: str, turns: int) -> tuple[str, tuple[str, ...]]:
-    """Create a deterministic sequence identity and prompts shared by all arms."""
+    """Create a deterministic, non-repeating prompt sequence shared by all arms."""
+    if type(turns) is not int or not 1 <= turns <= len(PROMPT_POOL):
+        # Fail explicitly rather than allowing ``random.sample`` to expose internals.
+        raise ValueError("Prompt turns must fit within the non-repeating prompt pool.")
     generator = random.Random(f"{seed}:{session_id}")  # noqa: S311 - experimental reproducibility
-    prompts = tuple(generator.choice(PROMPT_POOL) for _ in range(turns))
+    # Sampling without replacement preserves the historical experimental protocol.
+    prompts = tuple(generator.sample(PROMPT_POOL, turns))
     digest = sha256(
         (str(seed) + "\0" + session_id + "\0" + "\0".join(prompts)).encode()
     ).hexdigest()

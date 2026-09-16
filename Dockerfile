@@ -35,4 +35,4 @@ RUN set -eu; \
 
 EXPOSE 8080
 # gthread efficiently overlaps provider and disk waits; exec preserves signal forwarding.
-CMD exec gunicorn --bind "0.0.0.0:${PORT:-8080}" --worker-class gthread --workers "${WORKERS:-2}" --threads "${THREADS:-4}" --timeout 270 --graceful-timeout 30 flask-app:app
+CMD exec gunicorn --bind "0.0.0.0:${PORT:-8080}" --worker-class gthread --workers "${WORKERS:-1}" --threads "${THREADS:-4}" --timeout 270 --graceful-timeout 30 flask-app:app

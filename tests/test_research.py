@@ -15,6 +15,7 @@ from ste.research import (
     run_research,
     save_state,
 )
+from ste.runs.store import completed_records
 from ste.scoring import parse_judge_score, score_text
 
 ROOT = Path(__file__).parents[1]
@@ -28,6 +29,43 @@ def test_full_protocol_and_deterministic_shared_sequence():
     assert VARIANTS["named_rules"].endswith(STE_RULES)
     assert prompt_sequence(91, "session", 12) == prompt_sequence(91, "session", 12)
     assert prompt_sequence(92, "session", 12) != prompt_sequence(91, "session", 12)
+    # A session must not prime a later response by presenting the same prompt twice.
+    _, prompts = prompt_sequence(91, "session", len(PROMPT_POOL))
+    assert len(prompts) == len(set(prompts))
+
+
+def test_research_depth_cannot_exceed_non_repeating_pool():
+    """Reject protocol configurations that require reusing a prompt in one session."""
+    config = ResearchConfig(("openai/gpt-4o",), 1, (len(PROMPT_POOL) + 1,))
+    # Both the public configuration and lower-level sequence helper fail explicitly.
+    with pytest.raises(ValueError, match="non-repeating prompt pool"):
+        config.validate()
+    with pytest.raises(ValueError, match="non-repeating prompt pool"):
+        prompt_sequence(1, "session", len(PROMPT_POOL) + 1)
+
+
+def test_completed_records_loads_completed_research_schema(tmp_path):
+    """Expose completed worker snapshots without applying the preview resume schema."""
+    run_id = "c" * 32
+    config = ResearchConfig(("openai/gpt-4o",), 1, (1,))
+    state = new_state(config, run_id)
+    # This is the versioned record shape emitted by the asynchronous research worker.
+    record = {
+        "schema_version": state["schema_version"],
+        "protocol_version": state["protocol_version"],
+        "scoring_version": state["scoring_version"],
+        "run_mode": "research",
+        "run_id": run_id,
+        "session": 1,
+        "model": "openai/gpt-4o",
+        "variant": "bare",
+        "depth": 1,
+        "score": 75.0,
+    }
+    state.update(status="complete", records=[record])
+    save_state(tmp_path / f"{run_id}.json", state)
+    # Preview-only fields such as owner_id and batches are intentionally absent.
+    assert completed_records(tmp_path) == [record]
 
 
 @pytest.mark.parametrize("text", ["", "```markup only```", "*** ### ---"])
