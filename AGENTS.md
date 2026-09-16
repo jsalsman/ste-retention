@@ -19,3 +19,4 @@
 - Run both `ruff check` and `ruff format --check` before committing Python changes.
 - Keep runtime requirements separate from development and test requirements.
 - Do not add tests that build or run the Docker container.
+- Keep `README.md` and `AGENTS.md` up to date with important learnings and changes.

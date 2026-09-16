@@ -1,6 +1,6 @@
 """Transport-independent checks for resumable experiment orchestration."""
 
-from experiment import INTERACTIVE_DEADLINE_SECONDS, MAX_WORK_UNITS, run_experiment
+from ste.experiment import INTERACTIVE_DEADLINE_SECONDS, MAX_WORK_UNITS, run_experiment
 
 
 def test_resume_skips_saved_unit_and_rebuilds_context():

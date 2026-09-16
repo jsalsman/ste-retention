@@ -1,6 +1,6 @@
 """Regression coverage for run-isolated factorial leaderboard calculations."""
 
-from leaderboard import render_leaderboard
+from ste.leaderboard import render_leaderboard
 
 
 def _arm(run_id: str, variant: str, score: int) -> dict:
