@@ -145,7 +145,7 @@ The server sends newline-delimited JSON (NDJSON). Each line is one valid JSON ob
 
 A browser, proxy, or server timeout can stop a full study. Streaming does not extend the Cloud Run request limit. Copy the run ID. Select the same mode and settings, enter the run ID, and supply a new API key to resume.
 
-The web application has no authentication or authorization layer. A person who knows a run ID can inspect status, resume the run, or delete the snapshot. Use a suitable deployment boundary if model text is sensitive.
+The web application has no authentication or authorization layer. A person who knows a run ID can inspect status, resume the run, or delete the snapshot. Deletion returns a conflict while that run holds an active lease, which prevents a later checkpoint from recreating the deleted snapshot. Use a suitable deployment boundary if model text is sensitive.
 
 ### Command-line worker
 

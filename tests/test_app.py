@@ -53,6 +53,11 @@ def test_static_page_contract():
     assert "{{" not in page and "progress" not in page.lower()
     assert not (ROOT / "templates").exists()
 
+    # Request cleanup must restore disabled state for hidden required mode fields.
+    script = (ROOT / "static" / "app.js").read_text()
+    cleanup = script.split("function setRunning", 1)[1].split("async function askModel", 1)[0]
+    assert "showMode();" in cleanup
+
 
 def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch):
     """Give a helpful absence and escape external model names when data exists."""
@@ -234,6 +239,24 @@ def test_run_status_distinguishes_active_stalled_and_complete(client, module):
     module.save_run(module.EXPERIMENTS, state)
     response = client.get(endpoint)
     assert response.json["liveness"] == "complete" and "records" not in response.json
+
+
+def test_delete_rejects_active_run_then_removes_idle_snapshot(client, module):
+    """Keep an active worker snapshot, then delete it after its lease is released."""
+    state = module.create_run(module.EXPERIMENTS, "openai/gpt-4o", 1, 1)
+    lease = module.acquire_lease(state["run_id"], module.EXPERIMENTS)
+    endpoint = f"/api/experiments/{state['run_id']}"
+    try:
+        # A concurrent delete must not let the worker recreate a reportedly deleted run.
+        response = client.delete(endpoint)
+        assert response.status_code == 409
+        assert (module.EXPERIMENTS / f"{state['run_id']}.json").is_file()
+    finally:
+        lease.release()
+
+    # Once idle, deletion owns the same lease for the complete unlink operation.
+    assert client.delete(endpoint).status_code == 204
+    assert not (module.EXPERIMENTS / f"{state['run_id']}.json").exists()
 
 
 @pytest.mark.parametrize(

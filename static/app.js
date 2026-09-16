@@ -52,9 +52,13 @@
     cancel.disabled = !running;
     // Preserve cancellation access while preventing duplicate submissions.
     for (const element of runForm.querySelectorAll("input, button[type='submit']")) element.disabled = running;
-    // Move keyboard focus into the visible overlay, then return it when work ends.
+    // Move keyboard focus into the visible overlay, then restore mode-specific controls.
     if (running) cancel.focus();
-    else start.focus();
+    else {
+      // The broad running-state toggle enabled every input, including hidden required fields.
+      showMode();
+      start.focus();
+    }
   }
 
   /** Submit one non-streamed interaction and render server text without HTML parsing. */
