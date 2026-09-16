@@ -44,7 +44,7 @@ def test_leaderboard_route_no_data(client, tmp_path):
 
 
 @patch("flask_app.run_session_generator")
-def test_experiment_stream(mock_generator, client):
+def test_experiment_stream(mock_generator, client, tmp_path):
     # Mock the generator to yield a start, status, and record event
     def mock_run(*args, **kwargs):
         yield {
@@ -72,10 +72,11 @@ def test_experiment_stream(mock_generator, client):
     mock_generator.side_effect = mock_run
 
     # Send valid request
-    response = client.post(
-        "/api/experiment/stream",
-        json={"api_key": "test_key", "model": "anthropic/claude-sonnet-4.5"},
-    )
+    with patch.object(flask_app_module, "RECORDS_FILE", str(tmp_path / "stream_records.jsonl")):
+        response = client.post(
+            "/api/experiment/stream",
+            json={"api_key": "test_key", "model": "anthropic/claude-sonnet-4.5"},
+        )
 
     assert response.status_code == 200
     assert response.mimetype == "application/x-ndjson"
@@ -110,3 +111,70 @@ def test_experiment_stream_invalid_model(client):
     )
     assert response.status_code == 400
     assert "Unsupported model" in response.json["error"]
+
+
+def test_get_incomplete_session_liveness(tmp_path):
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from ste.orchestration import get_incomplete_session
+
+    records_file = tmp_path / "liveness_records.jsonl"
+
+    now = datetime.now(timezone.utc)
+    stale_time = now - timedelta(seconds=200)
+
+    with open(records_file, "a") as f:
+        # Completed variant 'bare' at max depth 12
+        f.write(
+            json.dumps(
+                {
+                    "session": 1,
+                    "model": "test-model",
+                    "variant": "bare",
+                    "depth": 12,
+                    "score": 100,
+                    "timestamp": stale_time.isoformat(),
+                }
+            )
+            + "\n"
+        )
+        # Incomplete variant 'rules' (failed after depth 6)
+        f.write(
+            json.dumps(
+                {
+                    "session": 1,
+                    "model": "test-model",
+                    "variant": "rules",
+                    "depth": 6,
+                    "score": 100,
+                    "timestamp": stale_time.isoformat(),
+                }
+            )
+            + "\n"
+        )
+
+    s_id, missing = get_incomplete_session(str(records_file), "test-model", max_depth=12)
+    assert s_id == 1
+    # 'rules' didn't reach 12, so it's missing along with 'named' and 'named_rules'
+    assert set(missing) == {"rules", "named", "named_rules"}
+
+    # 2. Add a recent heartbeat for session 1. It should now be skipped.
+    recent_time = now - timedelta(seconds=10)
+    with open(records_file, "a") as f:
+        f.write(
+            json.dumps(
+                {
+                    "session": 1,
+                    "model": "test-model",
+                    "variant": "rules",
+                    "type": "heartbeat_turn_complete",
+                    "timestamp": recent_time.isoformat(),
+                }
+            )
+            + "\n"
+        )
+
+    s_id, missing = get_incomplete_session(str(records_file), "test-model", max_depth=12)
+    assert s_id == 2
+    assert len(missing) == 0

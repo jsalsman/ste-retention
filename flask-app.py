@@ -72,7 +72,9 @@ def experiment_stream():
         return jsonify({"error": "Unsupported model"}), 400
 
     # Check for incomplete sessions to resume
-    session_id, variants_to_run = get_incomplete_session(RECORDS_FILE, model)
+    session_id, variants_to_run = get_incomplete_session(
+        RECORDS_FILE, model, max_depth=max(DEPTH_SCHEDULE)
+    )
     if not variants_to_run:
         variants_to_run = list(VARIANTS.keys())
 

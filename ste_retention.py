@@ -89,7 +89,9 @@ def main():
         print(f"\n--- batch {batch} (spent {spend[0]:.2f}) ---")
         for model in MODELS:
             for _ in range(SESSIONS_PER_BATCH):
-                session_id, variants_to_run = get_incomplete_session(RECORDS_FILE, model)
+                session_id, variants_to_run = get_incomplete_session(
+                    RECORDS_FILE, model, max_depth=max(depths)
+                )
                 if not variants_to_run:
                     variants_to_run = list(VARIANTS.keys())
 

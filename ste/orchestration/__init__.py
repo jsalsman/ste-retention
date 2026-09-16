@@ -168,10 +168,23 @@ def get_records_file():
     return "ste_retention_run/records.jsonl"
 
 
-def get_incomplete_session(records_file, model):
+def parse_iso8601(timestamp_str):
+    """Fallback datetime parsing for python < 3.11"""
+    try:
+        return datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(timezone.utc)
+
+
+def get_incomplete_session(records_file, model, max_depth=12, stale_seconds=150):
     """
     Scans the records and returns (session_id, missing_variants) for the given model.
-    If all sessions for the model are complete, returns (next_session_id, []).
+    A session is only considered available for resumption if its most recent
+    timestamp (including heartbeats) is older than stale_seconds. This ensures
+    concurrent multi-user safety by not picking up actively running sessions.
+
+    If all sessions for the model are complete or actively running,
+    returns (next_session_id, []).
     """
     import json
     import os
@@ -180,22 +193,51 @@ def get_incomplete_session(records_file, model):
         return 1, []
 
     obs = {}
+    last_activity = {}
     max_session_id = 0
+    now = datetime.now(timezone.utc)
+
     with open(records_file, encoding="utf-8") as fh:
         for line in fh:
             if not line.strip():
                 continue
             try:
                 r = json.loads(line)
-                s_id = r["session"]
+                s_id = r.get("session")
+                if not s_id:
+                    continue
                 max_session_id = max(max_session_id, s_id)
-                if r["model"] == model:
-                    obs.setdefault(s_id, set()).add(r["variant"])
+
+                # Update liveness tracker for the session
+                if "timestamp" in r:
+                    dt = parse_iso8601(r["timestamp"])
+                    if s_id not in last_activity or dt > last_activity[s_id]:
+                        last_activity[s_id] = dt
+
+                if r.get("model") == model:
+                    if s_id not in obs:
+                        obs[s_id] = {}
+
+                    # Track the highest depth scored for each variant
+                    if "score" in r and "depth" in r:
+                        variant = r["variant"]
+                        obs[s_id][variant] = max(obs[s_id].get(variant, 0), r["depth"])
+
             except Exception:
                 continue
 
-    for s_id, variants in obs.items():
-        if len(variants) < len(VARIANTS):
-            return s_id, list(set(VARIANTS.keys()) - variants)
+    for s_id, variant_depths in obs.items():
+        completed_variants = [v for v, d in variant_depths.items() if d >= max_depth]
+
+        if len(completed_variants) < len(VARIANTS):
+            # Check liveness
+            if s_id in last_activity:
+                delta = (now - last_activity[s_id]).total_seconds()
+                if delta < stale_seconds:
+                    # Session is actively being processed by another worker
+                    continue
+
+            missing_variants = list(set(VARIANTS.keys()) - set(completed_variants))
+            return s_id, missing_variants
 
     return max_session_id + 1, []

@@ -83,6 +83,8 @@ def load_records(records_file):
                 if not line.strip():
                     continue
                 r = json.loads(line)
+                if "score" not in r:
+                    continue
                 key = (r["session"], r["model"], r["depth"])
                 obs.setdefault(key, {})[r["variant"]] = r["score"]
     except Exception as e:
