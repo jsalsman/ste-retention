@@ -47,6 +47,8 @@ def test_static_page_contract():
         asset in page for asset in ("static/styles.css", "static/app.js", "static/loading.gif")
     )
     assert 'aria-live="polite"' in page
+    overlay = page.split('id="loading-overlay"', 1)[1]
+    assert 'id="cancel"' in overlay and page.count('id="cancel"') == 1
     assert "{{" not in page and "progress" not in page.lower()
     assert not (ROOT / "templates").exists()
 
@@ -56,14 +58,17 @@ def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch
     monkeypatch.setattr(module, "RECORDS", tmp_path / "missing.jsonl")
     assert client.get("/leaderboard").status_code == 404
     path = tmp_path / "records.jsonl"
-    path.write_text(
-        json.dumps({"session": 1, "model": "<x>", "variant": "bare", "depth": 1, "score": 50})
-        + "\n"
-    )
+    records = [
+        {"session": 1, "model": "<x>", "variant": variant, "depth": 1, "score": score}
+        for variant, score in (("bare", 50), ("rules", 60), ("named", 70), ("named_rules", 90))
+    ]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
     monkeypatch.setattr(module, "RECORDS", path)
     response = client.get("/leaderboard")
     assert response.status_code == 200
     assert b"&lt;x&gt;" in response.data and b"<x>" not in response.data
+    assert b"Rule effect" in response.data and b"+10.0" in response.data
+    assert b"Naming effect" in response.data and b"+20.0" in response.data
 
 
 def test_interaction_validation_and_mocked_success(client, module, monkeypatch):

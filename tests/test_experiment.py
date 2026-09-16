@@ -1,6 +1,6 @@
 """Transport-independent checks for resumable experiment orchestration."""
 
-from experiment import run_experiment
+from experiment import INTERACTIVE_DEADLINE_SECONDS, MAX_WORK_UNITS, run_experiment
 
 
 def test_resume_skips_saved_unit_and_rebuilds_context():
@@ -41,3 +41,20 @@ def test_resume_skips_saved_unit_and_rebuilds_context():
     assert len(checkpoints) == 7 and len(checkpoints[-1]) == 8
     assert events[0]["completed"] == 1 and events[-1]["type"] == "success"
     assert all("sample-secret" not in str(event) for event in events)
+
+
+def test_maximum_run_has_a_request_timeout_below_the_overall_deadline():
+    """Keep the maximum serial workload within the synchronous deployment budget."""
+    timeouts = []
+
+    def request(_key, _model, _messages, **options):
+        """Record the bounded timeout while replacing every paid provider call."""
+        timeouts.append(options["timeout"])
+        # The deterministic reply is scored locally without external services.
+        return "Use a short active sentence."
+
+    events = list(run_experiment("secret", "openai/gpt-4o", 1, 3, request=request))
+
+    assert events[-1]["type"] == "success"
+    assert len(timeouts) == MAX_WORK_UNITS
+    assert sum(timeouts) < INTERACTIVE_DEADLINE_SECONDS

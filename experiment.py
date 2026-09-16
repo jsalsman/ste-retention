@@ -33,9 +33,14 @@ PROMPTS = (
     "Describe how to inspect a drive belt for wear.",
     "Explain how a pressure relief valve works.",
 )
-MAX_BATCHES = 2
+# Interactive requests allow one 12-call batch; replicated studies belong in a worker.
+MAX_BATCHES = 1
 MAX_TURNS = 3
 MAX_WORK_UNITS = MAX_BATCHES * MAX_TURNS * len(VARIANTS)
+# Interactive work must finish comfortably inside Cloud Run's 300-second request limit.
+# The per-call cap makes all 12 serial worst-case waits fit inside this overall budget.
+INTERACTIVE_DEADLINE_SECONDS = 240.0
+UPSTREAM_TIMEOUT_SECONDS = 9.0
 
 
 def validate_run(model: object, batches: object, turns: object) -> tuple[str, int, int]:
@@ -106,13 +111,20 @@ def run_experiment(
                         )
                     )
                     continue
+                elapsed = max(0.0, clock() - started)
+                remaining = INTERACTIVE_DEADLINE_SECONDS - elapsed
+                if remaining <= 0:
+                    # Never start more paid work after the synchronous request budget expires.
+                    raise TimeoutError("The interactive experiment deadline was reached.")
                 unit_started = clock()
                 messages = [
                     {"role": "system", "content": instruction},
                     *history,
                     {"role": "user", "content": prompt},
                 ]
-                reply = request(api_key, model, messages, timeout=45, max_tokens=300)
+                # Leave room for scoring, checkpoint I/O, streaming, and deployment overhead.
+                timeout = min(UPSTREAM_TIMEOUT_SECONDS, remaining)
+                reply = request(api_key, model, messages, timeout=timeout, max_tokens=300)
                 # Context is retained within an arm, matching the retention design.
                 history.extend(
                     ({"role": "user", "content": prompt}, {"role": "assistant", "content": reply})

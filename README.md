@@ -153,8 +153,14 @@ for example:
 ```sh
 gcloud run deploy ste-retention --source . --region REGION --allow-unauthenticated \
   --timeout 300 \
+  --add-volume=name=experiment-data,type=cloud-storage,bucket=BUCKET \
+  --add-volume-mount=volume=experiment-data,mount-path=/experiments \
   --set-env-vars=PYTHONUNBUFFERED=1,EXPERIMENTS_DIR=/experiments,THREADS=4
 ```
+
+Replace `BUCKET` with a Cloud Storage bucket on which the runtime service account
+has the object permissions described above. The mounted bucket makes
+`/experiments` writable and durable for the container's non-root `app` user.
 
 Do not place a shared OpenRouter key in that environment for this bring-your-own-
 key UI. For authenticated server-owned inference, use Secret Manager and a

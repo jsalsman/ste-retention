@@ -43,8 +43,8 @@
 
       <form id="experiment-form" class="card">
         <h2>Run a bounded experiment</h2>
-        <label for="batches">Batches (maximum 2)</label>
-        <input id="batches" type="number" min="1" max="2" value="1" required>
+        <label for="batches">Batches (interactive maximum 1)</label>
+        <input id="batches" type="number" min="1" max="1" value="1" required>
         <label for="turns">Turns per variant (maximum 3)</label>
         <input id="turns" type="number" min="1" max="3" value="1" required>
         <label for="resume-run-id">Resume run ID (optional)</label>
@@ -52,18 +52,18 @@
         <p class="help">After a disconnect, enter the displayed run ID with the same model and controls. Completed work will not be repeated.</p>
         <button id="check-run" type="button" class="secondary">Check run status</button>
         <button type="submit">Start experiment</button>
-        <button id="cancel" type="button" class="secondary" disabled>Cancel</button>
         <div id="experiment-status" class="status" role="status" aria-live="polite">Ready for a bounded run.</div>
         <div id="experiment-result" class="result" tabindex="0">Results and a resumable run ID will appear here.</div>
       </form>
     </section>
   </main>
 
-  <div id="loading-overlay" class="overlay" hidden aria-hidden="true">
-    <div class="overlay-card" role="status" aria-live="polite" aria-atomic="true">
+  <div id="loading-overlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="overlay-message" hidden aria-hidden="true">
+    <div class="overlay-card">
       <img src="static/loading.gif" alt="" width="96" height="96">
-      <p id="overlay-message">Starting the experiment…</p>
+      <p id="overlay-message" role="status" aria-live="polite" aria-atomic="true">Starting the experiment…</p>
       <p id="overlay-eta"></p>
+      <button id="cancel" type="button" class="secondary" disabled>Cancel experiment</button>
     </div>
   </div>
 </body>

@@ -11,6 +11,7 @@
   const overlayEta = document.querySelector("#overlay-eta");
   const cancel = document.querySelector("#cancel");
   const checkRun = document.querySelector("#check-run");
+  const start = runForm.querySelector("button[type='submit']");
   let controller = null;
 
   /** Read and validate the shared credential without copying it into browser storage. */
@@ -34,6 +35,9 @@
     cancel.disabled = !running;
     // Preserve cancellation access while preventing duplicate submissions.
     for (const element of runForm.querySelectorAll("input, button[type='submit']")) element.disabled = running;
+    // Move keyboard focus into the visible overlay, then return it when work ends.
+    if (running) cancel.focus();
+    else start.focus();
   }
 
   /** Submit one non-streamed interaction and render server text without HTML parsing. */

@@ -34,11 +34,21 @@ def main() -> int:
     work = batches * turns * 4
     if input(f"Run {work} bounded paid requests? [y/N] ").strip().lower() != "y":
         return 0
-    for event in run_experiment(api_key, model, batches, turns):
+    persisted = 0
+
+    def checkpoint(records: list[dict]) -> None:
+        """Append only responses completed since the preceding durable checkpoint."""
+        nonlocal persisted
+        # The orchestrator supplies cumulative snapshots, so slicing avoids duplicate lines.
+        new_records = records[persisted:]
+        if new_records:
+            append_records(args.records, new_records)
+            # Advance only after append_records flushes every newly completed response.
+            persisted = len(records)
+
+    # Checkpoint callbacks run before progress is printed and survive a later provider failure.
+    for event in run_experiment(api_key, model, batches, turns, persist=checkpoint):
         print(event["message"])
-        # Only the terminal event contains safe experiment records.
-        if event["type"] == "success":
-            append_records(args.records, event["records"])
     return 0
 
 
