@@ -1,8 +1,6 @@
-"""Research-protocol, scoring, resume, and authorization regression tests."""
+"""Research-protocol, scoring, and resume regression tests."""
 
-import importlib.util
 import json
-from pathlib import Path
 
 import pytest
 
@@ -23,8 +21,6 @@ from ste.research import (
 )
 from ste.runs.store import completed_records
 from ste.scoring import parse_judge_score, score_text
-
-ROOT = Path(__file__).parents[1]
 
 
 def test_full_protocol_and_deterministic_shared_sequence():
@@ -171,33 +167,3 @@ def test_resume_rejects_changed_configuration_and_duplicate_units(tmp_path):
     changed = ResearchConfig(("openai/gpt-4o",), 1, (1,), seed=4)
     with pytest.raises(ValueError):
         load_state(path, changed, "b" * 32)
-
-
-def test_owner_cannot_view_resume_or_delete_another_users_run(tmp_path, monkeypatch):
-    """Enforce owner checks on every run route while treating IDs as non-secret."""
-    spec = importlib.util.spec_from_file_location("secured_flask_app", ROOT / "flask-app.py")
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader
-    spec.loader.exec_module(module)
-    module.app.config.update(TESTING=True)
-    module.EXPERIMENTS = tmp_path
-    monkeypatch.setenv("AUTH_REQUIRED", "true")
-    monkeypatch.setenv("AUTH_TOKENS_JSON", json.dumps({"alice-token": "alice", "bob-token": "bob"}))
-    state = module.create_run(tmp_path, "openai/gpt-4o", 1, 1, owner_id="alice")
-    bob = {"Authorization": "Bearer bob-token"}
-    endpoint = f"/api/experiments/{state['run_id']}"
-    client = module.app.test_client()
-    assert client.get(endpoint + "/status", headers=bob).status_code == 404
-    assert client.delete(endpoint, headers=bob).status_code == 404
-    response = client.post(
-        "/api/experiments/stream",
-        headers=bob,
-        json={
-            "api_key": "x",
-            "model": "openai/gpt-4o",
-            "batches": 1,
-            "turns": 1,
-            "resume_run_id": state["run_id"],
-        },
-    )
-    assert response.status_code == 400

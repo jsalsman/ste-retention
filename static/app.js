@@ -6,6 +6,7 @@
   const model = document.querySelector("#model");
   const chatForm = document.querySelector("#chat-form");
   const runForm = document.querySelector("#experiment-form");
+  const runMode = document.querySelector("#run-mode");
   const overlay = document.querySelector("#loading-overlay");
   const overlayMessage = document.querySelector("#overlay-message");
   const overlayEta = document.querySelector("#overlay-eta");
@@ -13,6 +14,22 @@
   const checkRun = document.querySelector("#check-run");
   const start = runForm.querySelector("button[type='submit']");
   let controller = null;
+
+  /** Show only the controls that apply to the selected experiment protocol. */
+  function showMode() {
+    const research = runMode.value === "research";
+    const previewOptions = document.querySelector("#preview-options");
+    const researchOptions = document.querySelector("#research-options");
+    // Hidden controls are also disabled so browser validation ignores them.
+    previewOptions.hidden = research;
+    researchOptions.hidden = !research;
+    for (const input of previewOptions.querySelectorAll("input")) input.disabled = research;
+    for (const input of researchOptions.querySelectorAll("input")) input.disabled = !research;
+    // State the paid workload before the user submits the form.
+    document.querySelector("#mode-help").textContent = research
+      ? "The full protocol is resumable and can take longer than the web request limit."
+      : "The preview uses all four variants and makes at most 12 calls.";
+  }
 
   /** Read and validate the shared credential without copying it into browser storage. */
   function credential() {
@@ -109,7 +126,13 @@
     try {
       const resume = document.querySelector("#resume-run-id").value.trim();
       // The run ID is safe metadata; the credential remains confined to this request body.
-      const body = {api_key:credential(), model:model.value, batches:Number(document.querySelector("#batches").value), turns:Number(document.querySelector("#turns").value), resume_run_id:resume || null};
+      const body = {api_key:credential(), run_mode:runMode.value, model:model.value, resume_run_id:resume || null};
+      // Each mode sends only the settings that define that saved run.
+      if (runMode.value === "research") body.sessions = Number(document.querySelector("#sessions").value);
+      else {
+        body.batches = Number(document.querySelector("#batches").value);
+        body.turns = Number(document.querySelector("#turns").value);
+      }
       const response = await fetch("/api/experiments/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body), signal:controller.signal});
       await consumeStream(response);
     } catch (error) {
@@ -145,6 +168,8 @@
 
   chatForm.addEventListener("submit", askModel);
   runForm.addEventListener("submit", startExperiment);
+  runMode.addEventListener("change", showMode);
   cancel.addEventListener("click", () => controller?.abort());
   checkRun.addEventListener("click", checkRunStatus);
+  showMode();
 })();

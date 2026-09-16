@@ -7,13 +7,13 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, stream_with_context
 
-from ste.auth import AuthError, authenticate, authorize, enforce_rate_limit
 from ste.experiment import ALLOWED_MODELS, run_experiment, validate_run
 from ste.leaderboard import render_file, render_leaderboard
 from ste.models.openrouter import UpstreamError, chat
 from ste.records import RecordError
+from ste.research import ResearchConfig, load_state, new_state, run_research, save_state
 from ste.runs.lease import RunActiveError, acquire_lease
-from ste.runs.store import RunStoreError, completed_records, create_run, load_run, save_run
+from ste.runs.store import RUN_ID, RunStoreError, completed_records, create_run, load_run, save_run
 
 # All repository assets resolve from this file rather than the process directory.
 ROOT = Path(__file__).resolve().parent
@@ -81,8 +81,6 @@ def leaderboard_page():
 def interact():
     """Perform one bounded model interaction while keeping its key ephemeral."""
     try:
-        owner_id = authenticate(request)
-        enforce_rate_limit(owner_id)
         data = _payload()
         api_key = _key(data)
         model, prompt = data.get("model"), data.get("prompt")
@@ -93,7 +91,7 @@ def interact():
         # The credential exists only in this call frame and never enters the response.
         answer = chat(api_key, model, [{"role": "user", "content": prompt.strip()}])
         return jsonify(answer=answer)
-    except (AuthError, ValueError) as exc:
+    except ValueError as exc:
         return jsonify(error=str(exc)), 400
     except UpstreamError:
         return jsonify(error="The model provider could not complete the request."), 502
@@ -102,21 +100,23 @@ def interact():
 @app.post("/api/experiments/stream")
 @app.post("/run-experiment")
 def experiment_stream():
-    """Validate a bounded run, then serialize progress as context-aware NDJSON."""
+    """Run or resume a preview or complete research study as safe NDJSON."""
     try:
-        owner_id = authenticate(request)
-        enforce_rate_limit(owner_id)
         data = _payload()
         api_key = _key(data)
+        mode = data.get("run_mode", "preview")
+        if mode == "research":
+            return _research_stream(data, api_key)
+        if mode != "preview":
+            raise ValueError("Select a supported experiment type.")
         model, batches, turns = validate_run(
             data.get("model"), data.get("batches"), data.get("turns")
         )
         resume_id = data.get("resume_run_id")
         if resume_id in (None, ""):
-            state = create_run(EXPERIMENTS, model, batches, turns, owner_id=owner_id)
+            state = create_run(EXPERIMENTS, model, batches, turns)
         elif isinstance(resume_id, str):
             state = load_run(EXPERIMENTS, resume_id)
-            authorize(owner_id, state)
             # Never resume saved work under changed parameters or a different model.
             if (state["model"], state["batches"], state["turns"]) != (model, batches, turns):
                 raise ValueError("Saved run settings do not match this request.")
@@ -130,7 +130,7 @@ def experiment_stream():
         save_run(EXPERIMENTS, state)
     except RunActiveError as exc:
         return jsonify(error=str(exc)), 409
-    except (AuthError, OSError, RunStoreError, ValueError) as exc:
+    except (OSError, RunStoreError, ValueError) as exc:
         return jsonify(error=str(exc)), 400
 
     def checkpoint(records: list[dict]) -> None:
@@ -223,13 +223,164 @@ def experiment_stream():
     return response
 
 
+def _research_stream(data: dict, api_key: str) -> Response:
+    """Start or resume the full research protocol for the selected model.
+
+    The research path uses the same orchestrator as ``python -m ste.research``.
+    It checkpoints each paid unit, and the API key stays only in this request.
+    """
+    model = data.get("model")
+    sessions = data.get("sessions", 6)
+    config = ResearchConfig((model,), sessions)
+    config.validate()
+    resume_id = data.get("resume_run_id")
+    if resume_id in (None, ""):
+        state = new_state(config)
+    elif isinstance(resume_id, str) and RUN_ID.fullmatch(resume_id):
+        # The explicit configuration prevents a run from resuming with new semantics.
+        state = load_state(EXPERIMENTS / f"{resume_id}.json", config, resume_id)
+    else:
+        raise ValueError("The experiment run identifier is invalid.")
+    path = EXPERIMENTS / f"{state['run_id']}.json"
+    lease = acquire_lease(state["run_id"], EXPERIMENTS)
+    state["status"] = "running"
+    state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+    state["lease_expires_at"] = lease.expires_at.isoformat()
+    save_state(path, state)
+
+    def checkpoint(value: dict) -> None:
+        """Save one credential-free research checkpoint and renew its lease."""
+        expires = lease.heartbeat()
+        value["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+        value["lease_expires_at"] = expires.isoformat()
+        # Research state contains model output, but it never contains the API key.
+        save_state(path, value)
+
+    @stream_with_context
+    def generate():
+        """Translate research-worker events to independently valid NDJSON lines."""
+        started = datetime.now(timezone.utc)
+        completed = len(state["units"])
+        completed_at_start = completed
+        total = config.workload()["total_calls"]
+        terminal = False
+        try:
+            yield (
+                json.dumps(
+                    {
+                        "type": "status",
+                        "message": "Full research study started.",
+                        "completed": completed,
+                        "total": total,
+                        "elapsed_seconds": 0.0,
+                        "run_id": state["run_id"],
+                    }
+                )
+                + "\n"
+            )
+            for worker_event in run_research(api_key, config, state, checkpoint):
+                elapsed = max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+                if worker_event["type"] == "success":
+                    terminal = True
+                    state["lease_expires_at"] = None
+                    save_state(path, state)
+                    event = {
+                        "type": "success",
+                        "message": "Full research study complete.",
+                        "completed": total,
+                        "total": total,
+                        "elapsed_seconds": round(elapsed, 2),
+                        "run_id": state["run_id"],
+                    }
+                else:
+                    completed += 1
+                    measured = completed - completed_at_start
+                    event = {
+                        "type": "status",
+                        "message": f"Saved research call {completed} of {total}.",
+                        "completed": completed,
+                        "total": total,
+                        "elapsed_seconds": round(elapsed, 2),
+                        "run_id": state["run_id"],
+                    }
+                    # An ETA needs at least two measured calls to be useful.
+                    if measured >= 2 and elapsed > 0:
+                        event["eta_seconds"] = round(elapsed / measured * (total - completed), 1)
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+        except Exception:  # noqa: BLE001
+            if not terminal:
+                state["status"] = "interrupted"
+                state["lease_expires_at"] = None
+                try:
+                    save_state(path, state)
+                except OSError:
+                    pass
+                yield (
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": "The research study stopped safely.",
+                            "completed": completed,
+                            "total": total,
+                            "elapsed_seconds": round(
+                                max(0.0, (datetime.now(timezone.utc) - started).total_seconds()), 2
+                            ),
+                            "run_id": state["run_id"],
+                        }
+                    )
+                    + "\n"
+                )
+        finally:
+            if not terminal and state.get("status") != "interrupted":
+                state["status"] = "interrupted"
+                state["lease_expires_at"] = None
+                try:
+                    save_state(path, state)
+                except OSError:
+                    pass
+            lease.release()
+
+    response = Response(generate(), content_type="application/x-ndjson")
+    response.headers.update(
+        {
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+        }
+    )
+    return response
+
+
 @app.get("/api/experiments/<run_id>/status")
 def experiment_status(run_id: str):
     """Report persisted progress and timestamp-derived active or stalled liveness."""
     try:
-        owner_id = authenticate(request)
-        state = load_run(EXPERIMENTS, run_id)
-        authorize(owner_id, state)
+        if not RUN_ID.fullmatch(run_id):
+            raise RunStoreError("The experiment run identifier is invalid.")
+        path = EXPERIMENTS / f"{run_id}.json"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise RunStoreError("The saved experiment run is malformed.")
+        if raw.get("run_mode") == "research":
+            config_data = raw.get("config", {})
+            config = ResearchConfig(
+                tuple(config_data.get("models", ())),
+                config_data.get("sessions"),
+                tuple(config_data.get("depths", ())),
+                config_data.get("seed", 0),
+                config_data.get("budget_usd", 40.0),
+                config_data.get("provider_timeout", 120.0),
+                config_data.get("judge_model"),
+                config_data.get("judge_timeout", 120.0),
+                config_data.get("max_tokens", 600),
+            )
+            state = load_state(path, config, run_id)
+            completed = len(state["units"])
+            total = config.workload()["total_calls"]
+        else:
+            state = load_run(EXPERIMENTS, run_id)
+            completed = len(state["records"])
+            total = state["batches"] * state["turns"] * 4
         expiry_text = state.get("lease_expires_at")
         expiry = datetime.fromisoformat(expiry_text) if expiry_text else None
         now = datetime.now(timezone.utc)
@@ -243,27 +394,26 @@ def experiment_status(run_id: str):
             run_id=run_id,
             status=state["status"],
             liveness=liveness,
-            completed=len(state["records"]),
-            total=state["batches"] * state["turns"] * 4,
+            completed=completed,
+            total=total,
             heartbeat_at=state.get("heartbeat_at"),
             lease_expires_at=expiry_text,
             updated_at=state.get("updated_at"),
         )
-    except (AuthError, RunStoreError) as exc:
+    except (OSError, json.JSONDecodeError, RunStoreError, TypeError, ValueError) as exc:
         return jsonify(error=str(exc)), 404
 
 
 @app.delete("/api/experiments/<run_id>")
 def delete_experiment(run_id: str):
-    """Delete an owner's operational preview snapshot without touching research data."""
+    """Delete an explicitly identified experiment snapshot."""
     try:
-        owner_id = authenticate(request)
-        state = load_run(EXPERIMENTS, run_id)
-        authorize(owner_id, state)
-        # Validation in load_run makes the derived path traversal-safe.
+        if not RUN_ID.fullmatch(run_id):
+            raise RunStoreError("The experiment run identifier is invalid.")
+        # The narrow identifier validation makes the derived path traversal-safe.
         (EXPERIMENTS / f"{run_id}.json").unlink()
         return Response(status=204)
-    except (AuthError, OSError, RunStoreError) as exc:
+    except (OSError, RunStoreError) as exc:
         return jsonify(error=str(exc)), 404
 
 

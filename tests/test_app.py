@@ -123,6 +123,47 @@ def test_stream_framing_status_eta_and_terminal(client, module, monkeypatch):
     assert "sample-secret" not in response.text
 
 
+def test_full_research_stream_is_checkpointed_and_resumable(client, module, monkeypatch):
+    """Use the research orchestrator and resume its saved full-study snapshot."""
+
+    def fake_research(_key, config, state, persist):
+        """Simulate one paid unit and the terminal worker event."""
+        if not state["units"]:
+            # A resumed call must keep the durable unit and must not repeat paid work.
+            state["units"].append({"unit_id": "unit-1", "response": "Saved"})
+            persist(state)
+            yield {"type": "unit", "unit_id": "unit-1", "kind": "generation"}
+        state["status"] = "complete"
+        persist(state)
+        yield {"type": "success", "run_id": state["run_id"], "records": 0}
+
+    monkeypatch.setattr(module, "run_research", fake_research)
+    request_data = {
+        "api_key": "sample-secret",
+        "run_mode": "research",
+        "model": "openai/gpt-4o",
+        "sessions": 1,
+    }
+    response = client.post("/api/experiments/stream", json=request_data)
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert [event["type"] for event in events] == ["status", "status", "success"]
+    run_id = events[0]["run_id"]
+    saved = json.loads((module.EXPERIMENTS / f"{run_id}.json").read_text())
+    assert saved["run_mode"] == "research" and saved["status"] == "complete"
+    assert "sample-secret" not in response.text and "api_key" not in saved
+
+    # The public status route understands the research snapshot and its call count.
+    status = client.get(f"/api/experiments/{run_id}/status")
+    assert status.json["liveness"] == "complete"
+    assert status.json["completed"] == 1 and status.json["total"] == 48
+
+    request_data["resume_run_id"] = run_id
+    resumed = client.post("/api/experiments/stream", json=request_data)
+    resumed_events = [json.loads(line) for line in resumed.text.splitlines()]
+    assert [event["type"] for event in resumed_events] == ["status", "success"]
+    assert resumed_events[0]["completed"] == 1
+
+
 def test_interrupted_run_is_persisted_and_can_resume(client, module, monkeypatch):
     """Checkpoint partial work and supply it to a later request with the same run ID."""
 
