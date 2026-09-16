@@ -9,18 +9,18 @@ import os
 import sys
 
 from ste.leaderboard import generate_leaderboard_html
-from ste.orchestration.io import get_records_file
+from ste.orchestration.io import get_experiments_dir
 
-RECORDS_FILE = get_records_file()
+BASE_DIR = get_experiments_dir()
 OUTPUT_HTML = "leaderboard.html"
 
 
 def main():
-    if not os.path.exists(RECORDS_FILE):
-        print(f"No records at {RECORDS_FILE}.")
+    if not os.path.exists(os.path.join(BASE_DIR, "records")):
+        print(f"No records found in {BASE_DIR}.")
         sys.exit(1)
 
-    html = generate_leaderboard_html(RECORDS_FILE, partial=False)
+    html = generate_leaderboard_html(os.path.join(BASE_DIR, "records"), partial=False)
     if html.startswith("<p>"):
         print(html)
         sys.exit(1)

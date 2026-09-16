@@ -14,13 +14,13 @@ from ste.orchestration import (
     get_incomplete_session,
     run_session_generator,
 )
-from ste.orchestration.io import append_record, get_records_file
+from ste.orchestration.io import append_record, get_experiments_dir
 from ste.scoring import load_approved_words
 
 app = Flask(__name__)
 
 # Constants
-RECORDS_FILE = get_records_file()
+BASE_DIR = get_experiments_dir()
 APPROVED_WORDS_FILE = None
 JUDGE_MODEL = "anthropic/claude-sonnet-4.5"
 MODELS = [
@@ -31,7 +31,7 @@ MODELS = [
 DEPTH_SCHEDULE = [1, 6, 12]
 
 # Ensure run directory exists
-os.makedirs(os.path.dirname(RECORDS_FILE) if os.path.dirname(RECORDS_FILE) else ".", exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "records"), exist_ok=True)
 
 
 @app.route("/")
@@ -52,7 +52,9 @@ def healthz():
 @app.route("/api/leaderboard")
 def api_leaderboard():
     # Return partial=True so it doesn't wrap in <html> tags for the frontend AJAX injection
-    html = generate_leaderboard_html(RECORDS_FILE, partial=True)
+    import os
+
+    html = generate_leaderboard_html(os.path.join(BASE_DIR, "records"), partial=True)
     return Response(html, mimetype="text/html")
 
 
@@ -74,13 +76,13 @@ def experiment_stream():
 
     # Check for incomplete sessions to resume
     session_id, variants_to_run = get_incomplete_session(
-        RECORDS_FILE, model, max_depth=max(DEPTH_SCHEDULE)
+        BASE_DIR, model, max_depth=max(DEPTH_SCHEDULE)
     )
     if not variants_to_run:
         variants_to_run = list(VARIANTS.keys())
 
     # Deterministic seeding so resumption gets the exact same prompts
-    rng = random.Random(session_id)
+    rng = random.Random(str(session_id))
     prompts = rng.sample(TASK_PROMPTS, max(DEPTH_SCHEDULE))
     approved = load_approved_words(APPROVED_WORDS_FILE)
 
@@ -99,7 +101,7 @@ def experiment_stream():
                 "variant": variant,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
-            append_record(heartbeat, RECORDS_FILE)
+            append_record(heartbeat, os.path.join(BASE_DIR, "records", f"{session_id}.jsonl"))
 
         try:
             yield (
@@ -155,7 +157,10 @@ def experiment_stream():
                         )
 
                     elif event["type"] == "record":
-                        append_record(event["record"], RECORDS_FILE)
+                        append_record(
+                            event["record"],
+                            os.path.join(BASE_DIR, "records", f"{session_id}.jsonl"),
+                        )
 
             yield (
                 json.dumps(

@@ -18,7 +18,7 @@ from ste.orchestration import (
     get_incomplete_session,
     run_session_generator,
 )
-from ste.orchestration.io import append_record, get_records_file
+from ste.orchestration.io import append_record, get_experiments_dir
 from ste.scoring import load_approved_words
 
 MODELS = [
@@ -45,8 +45,8 @@ BUDGET_USD = 40.0
 NOMINAL_ALPHA = 0.05
 SEQUENTIAL_ALPHA = 0.0158
 
-RECORDS_FILE = get_records_file()
-OUTPUT_DIR = os.path.dirname(RECORDS_FILE)
+BASE_DIR = get_experiments_dir()
+OUTPUT_DIR = os.path.join(BASE_DIR, "records")
 
 JUDGE_MODEL = "anthropic/claude-sonnet-4.5"
 APPROVED_WORDS_FILE = None
@@ -90,12 +90,14 @@ def main():
         for model in MODELS:
             for _ in range(SESSIONS_PER_BATCH):
                 session_id, variants_to_run = get_incomplete_session(
-                    RECORDS_FILE, model, max_depth=max(depths)
+                    BASE_DIR,
+                    model,
+                    max_depth=max(depths),
                 )
                 if not variants_to_run:
                     variants_to_run = list(VARIANTS.keys())
 
-                rng = random.Random(session_id)
+                rng = random.Random(str(session_id))
                 prompts = rng.sample(TASK_PROMPTS, max(depths))
 
                 for variant in variants_to_run:
@@ -120,15 +122,20 @@ def main():
                                     "variant": variant,
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                 }
-                                append_record(heartbeat, RECORDS_FILE)
+                                append_record(
+                                    heartbeat,
+                                    os.path.join(BASE_DIR, "records", f"{session_id}.jsonl"),
+                                )
                             elif event["type"] == "record":
                                 r = event["record"]
                                 d = r["depth"]
                                 score = r["score"]
                                 obs.setdefault((session_id, model, d), {})[variant] = score
-                                append_record(r, RECORDS_FILE)
-                    except Exception as exc:
-                        print(f"  {model} s{session_id} {variant}: {exc}")
+                                append_record(
+                                    r, os.path.join(BASE_DIR, "records", f"{session_id}.jsonl")
+                                )
+                    except Exception:
+                        pass
                         continue
 
             done = sum(1 for c in obs.values() if len(c) == len(VARIANTS))
@@ -142,7 +149,9 @@ def main():
 
     complete = sum(1 for c in obs.values() if len(c) == len(VARIANTS))
     print(f"\nTotal spend {spend[0]:.2f} USD, {complete} complete cells.")
-    print(f"Records in {RECORDS_FILE}. Run make_leaderboard.py next.")
+    print(
+        f"Records in {os.path.join(BASE_DIR, "records", f"{session_id}.jsonl")}. Run make_leaderboard.py next."
+    )
 
 
 if __name__ == "__main__":

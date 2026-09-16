@@ -75,21 +75,32 @@ table{font-size:.78rem}th,td{padding:6px 3px}}
 """
 
 
-def load_records(records_file):
+def load_records(records_dir):
+    import os
+
     obs = {}
-    try:
-        with open(records_file, encoding="utf-8") as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                r = json.loads(line)
-                if "score" not in r:
-                    continue
-                key = (r["session"], r["model"], r["depth"])
-                obs.setdefault(key, {})[r["variant"]] = r["score"]
-    except Exception as e:
-        print(f"Error loading records: {e}")
+    if not os.path.exists(records_dir) or not os.path.isdir(records_dir):
         return None
+
+    for filename in os.listdir(records_dir):
+        if not filename.endswith(".jsonl"):
+            continue
+
+        filepath = os.path.join(records_dir, filename)
+        try:
+            with open(filepath, encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    r = json.loads(line)
+                    if "score" not in r:
+                        continue
+                    # session can be int or string (UUID)
+                    key = (str(r["session"]), r["model"], r["depth"])
+                    obs.setdefault(key, {})[r["variant"]] = r["score"]
+        except Exception as e:
+            print(f"Error loading records from {filename}: {e}")
+
     return {k: v for k, v in obs.items() if len(v) == len(VARIANTS)}
 
 

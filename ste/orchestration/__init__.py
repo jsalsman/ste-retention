@@ -167,60 +167,70 @@ def parse_iso8601(timestamp_str):
         return datetime.now(timezone.utc)
 
 
-def get_incomplete_session(records_file, model, max_depth=12, stale_seconds=150):
+def get_incomplete_session(base_dir, model, max_depth=12, stale_seconds=150):
     """
     Scans the records and returns (session_id, missing_variants) for the given model.
     A session is only considered available for resumption if its most recent
-    timestamp (including heartbeats) is older than stale_seconds. This ensures
-    concurrent multi-user safety by not picking up actively running sessions.
+    timestamp (including heartbeats) is older than stale_seconds.
+    It then attempts to acquire an atomic lock for the resumption state via GCS FUSE.
 
-    If all sessions for the model are complete or actively running,
-    returns (next_session_id, []).
+    If all sessions for the model are complete, actively running, or locked by another
+    worker, returns a fresh UUID session_id and [].
     """
     import json
     import os
+    import uuid
+    from datetime import datetime, timezone
 
-    if not os.path.exists(records_file):
-        return 1, []
+    from ste.orchestration.io import acquire_resume_lock
+
+    records_dir = os.path.join(base_dir, "records")
+    if not os.path.exists(records_dir):
+        return str(uuid.uuid4()), []
 
     obs = {}
     last_activity = {}
-    max_session_id = 0
     now = datetime.now(timezone.utc)
 
-    with open(records_file, encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            try:
-                r = json.loads(line)
-                s_id = r.get("session")
-                if not s_id:
+    # Scan all records files
+    for filename in os.listdir(records_dir):
+        if not filename.endswith(".jsonl"):
+            continue
+
+        filepath = os.path.join(records_dir, filename)
+        with open(filepath, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
                     continue
-                max_session_id = max(max_session_id, s_id)
+                try:
+                    r = json.loads(line)
+                    s_id = str(r.get("session"))
+                    if not s_id or s_id == "None":
+                        continue
 
-                # Update liveness tracker for the session
-                if "timestamp" in r:
-                    dt = parse_iso8601(r["timestamp"])
-                    if s_id not in last_activity or dt > last_activity[s_id]:
-                        last_activity[s_id] = dt
+                    # Update liveness tracker for the session
+                    if "timestamp" in r:
+                        dt = parse_iso8601(r["timestamp"])
+                        if s_id not in last_activity or dt > last_activity[s_id]:
+                            last_activity[s_id] = dt
 
-                if r.get("model") == model:
-                    if s_id not in obs:
-                        obs[s_id] = {}
+                    if r.get("model") == model:
+                        if s_id not in obs:
+                            obs[s_id] = {}
 
-                    # Track the highest depth scored for each variant
-                    if "score" in r and "depth" in r:
-                        variant = r["variant"]
-                        obs[s_id][variant] = max(obs[s_id].get(variant, 0), r["depth"])
+                        # Track the highest depth scored for each variant
+                        if "score" in r and "depth" in r:
+                            variant = r["variant"]
+                            obs[s_id][variant] = max(obs[s_id].get(variant, 0), r["depth"])
 
-            except Exception:
-                continue
+                except Exception:
+                    continue
 
     for s_id, variant_depths in obs.items():
         completed_variants = [v for v, d in variant_depths.items() if d >= max_depth]
+        completed_count = len(completed_variants)
 
-        if len(completed_variants) < len(VARIANTS):
+        if completed_count < len(VARIANTS):
             # Check liveness
             if s_id in last_activity:
                 delta = (now - last_activity[s_id]).total_seconds()
@@ -229,6 +239,9 @@ def get_incomplete_session(records_file, model, max_depth=12, stale_seconds=150)
                     continue
 
             missing_variants = list(set(VARIANTS.keys()) - set(completed_variants))
-            return s_id, missing_variants
 
-    return max_session_id + 1, []
+            # Atomic lock acquisition using GCS FUSE O_CREAT | O_EXCL
+            if acquire_resume_lock(s_id, completed_count, base_dir):
+                return s_id, missing_variants
+
+    return str(uuid.uuid4()), []
