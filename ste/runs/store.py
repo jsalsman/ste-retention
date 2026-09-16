@@ -22,6 +22,11 @@ class RunStoreError(ValueError):
     """Describe invalid or unavailable persisted run state without exposing content."""
 
 
+# Leaderboard discovery treats unreadable, invalid JSON, and schema-invalid snapshots
+# uniformly so one damaged file cannot prevent publication of other completed runs.
+SNAPSHOT_LOAD_ERRORS = (OSError, json.JSONDecodeError, RunStoreError)
+
+
 def _lock(run_id: str) -> threading.Lock:
     """Return the process-local lock that serializes updates for one run identifier."""
     with _LOCKS_GUARD:
@@ -171,13 +176,35 @@ def save_run(directory: Path, state: dict) -> None:
         os.replace(temporary, path)
 
 
-def _load_research_run(path: Path, run_id: str) -> dict:
-    """Load and validate the leaderboard-facing fields of a research snapshot."""
+def _load_research_run(path: Path) -> dict:
+    """Load one research snapshot and validate its leaderboard-facing contract.
+
+    The snapshot's embedded ``run_id`` is authoritative: operators may choose any
+    durable state filename, so the filename is deliberately not treated as identity.
+    The returned dictionary is safe for :func:`completed_records` to inspect, but
+    callers must still decide whether its status makes its records publishable.
+
+    Args:
+        path: Filesystem path of the candidate JSON research snapshot.
+
+    Returns:
+        The decoded research state when its versions, metadata, and every record
+        satisfy the current protocol's leaderboard contract.
+
+    Raises:
+        RunStoreError: If the file cannot be decoded, has incompatible versions,
+            lacks a usable run identifier, or contains an inconsistent record.
+
+    """
     try:
+        # Decode exactly once here rather than trusting the dispatch probe performed by
+        # ``completed_records``; the file may have changed between the two reads.
         state = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         # Research files are read-only here, so malformed snapshots are never resumed.
         raise RunStoreError("The research run is unavailable or malformed.") from exc
+    # Read version markers defensively because arbitrary JSON files can share the
+    # persistence directory and non-mapping values do not provide ``get``.
     versions = (
         state.get("schema_version") if isinstance(state, dict) else None,
         state.get("protocol_version") if isinstance(state, dict) else None,
@@ -186,17 +213,24 @@ def _load_research_run(path: Path, run_id: str) -> dict:
     # Keep research validation separate from the preview-only resume schema.
     if versions != (SCHEMA_VERSION, PROTOCOL_VERSION, SCORING_VERSION):
         raise RunStoreError("The research run uses an unsupported schema.")
+    # The persisted identifier, rather than ``path.stem``, binds records to this run.
+    # This permits documented operator-selected paths such as ``research/RUN.json``.
+    run_id = state.get("run_id")
     if (
-        state.get("run_id") != run_id
+        not isinstance(run_id, str)
+        or not RUN_ID.fullmatch(run_id)
         or state.get("run_mode") != "research"
         or state.get("status") not in {"pending", "running", "interrupted", "complete"}
         or not isinstance(state.get("records"), list)
     ):
         raise RunStoreError("The research run is malformed.")
+    # Validate every exported observation independently; a single malformed record
+    # excludes the snapshot instead of leaking partial or misleading results.
     for record in state["records"]:
         # The leaderboard consumes these identity, grouping, and numeric fields.
         required = {"schema_version", "protocol_version", "scoring_version", "run_mode"}
         required.update({"run_id", "session", "model", "variant", "depth", "score"})
+        # Booleans are numeric subclasses, so score validation rejects them explicitly.
         score = record.get("score") if isinstance(record, dict) else None
         valid_score = (
             not isinstance(score, bool)
@@ -204,6 +238,8 @@ def _load_research_run(path: Path, run_id: str) -> dict:
             and math.isfinite(score)
             and 0 <= score <= 100
         )
+        # Each record repeats the durable contract so exported rows remain independently
+        # auditable after they are separated from their source snapshot.
         if (
             not isinstance(record, dict)
             or not required.issubset(record)
@@ -219,6 +255,7 @@ def _load_research_run(path: Path, run_id: str) -> dict:
             or not valid_score
         ):
             raise RunStoreError("The research run contains an inconsistent record.")
+    # Return only after all records agree with their parent run and current versions.
     return state
 
 
@@ -232,10 +269,10 @@ def completed_records(directory: Path) -> list[dict]:
             # Dispatch on the minimal mode marker before applying a mode-specific schema.
             candidate = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(candidate, dict) and candidate.get("run_mode") == "research":
-                state = _load_research_run(path, path.stem)
+                state = _load_research_run(path)
             else:
                 state = load_run(directory, path.stem)
-        except (OSError, json.JSONDecodeError, RunStoreError):
+        except SNAPSHOT_LOAD_ERRORS:
             # One damaged run must not make all valid leaderboard data unavailable.
             continue
         if state["status"] == "complete" and state.get("run_mode") == "research":

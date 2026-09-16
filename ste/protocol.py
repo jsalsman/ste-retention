@@ -5,7 +5,7 @@ from types import MappingProxyType
 # These versions are persisted on every run and observation.  Schema changes
 # describe representation; protocol and scoring changes describe semantics.
 SCHEMA_VERSION = 2
-PROTOCOL_VERSION = "ste-retention-2.0"
+PROTOCOL_VERSION = "ste-retention-2.1"
 SCORING_VERSION = "mechanical-2.0"
 
 # The complete instruction text is shared by the two detailed arms.  This is a

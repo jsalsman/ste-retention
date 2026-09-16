@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from ste.protocol import DEFAULT_RESEARCH_DEPTHS, PROMPT_POOL, STE_RULES, VARIANTS
+from ste.protocol import (
+    DEFAULT_RESEARCH_DEPTHS,
+    PROMPT_POOL,
+    PROTOCOL_VERSION,
+    STE_RULES,
+    VARIANTS,
+)
 from ste.research import (
     ResearchConfig,
     load_state,
@@ -73,9 +79,25 @@ def test_completed_records_loads_completed_research_schema(tmp_path):
         "score": 75.0,
     }
     state.update(status="complete", records=[record])
-    save_state(tmp_path / f"{run_id}.json", state)
-    # Preview-only fields such as owner_id and batches are intentionally absent.
+    # Operator-selected state paths need not encode the independently generated run ID.
+    save_state(tmp_path / "operator-selected-state.json", state)
+    # Preview-only fields and a filename-derived run ID are intentionally unnecessary.
     assert completed_records(tmp_path) == [record]
+
+
+def test_load_state_rejects_snapshot_from_repeating_prompt_protocol(tmp_path):
+    """Reject paid partial results whose prompts came from the prior algorithm."""
+    path = tmp_path / "legacy.json"
+    run_id = "d" * 32
+    config = ResearchConfig(("openai/gpt-4o",), 1, (1,), seed=3)
+    state = new_state(config, run_id)
+    # Version 2.0 sampled prompts with replacement, making its saved units unsafe to resume.
+    state["protocol_version"] = "ste-retention-2.0"
+    save_state(path, state)
+    # The current protocol must fail before old responses can enter reconstructed history.
+    assert PROTOCOL_VERSION != "ste-retention-2.0"
+    with pytest.raises(ValueError, match="incompatible versions"):
+        load_state(path, config, run_id)
 
 
 @pytest.mark.parametrize("text", ["", "```markup only```", "*** ### ---"])
