@@ -1,17 +1,16 @@
-__pycache__/
-.venv
-*.log
-
-# Development
+.git/
 .venv/
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
 .ruff_cache/
-.env
-
-# Application output/secrets
-approved_words.txt
+tests/
 ste_retention_run/
+approved_words.txt
+.env
 leaderboard.html
+README.md
+AGENTS.md
+devserver.sh
+requirements-dev.txt

@@ -1,0 +1,180 @@
+:root {
+    --paper: #E9EDF1;
+    --panel: #fff;
+    --ink: #16222E;
+    --muted: #5C6B78;
+    --rule: #C6D0D9;
+    --pos: #1F5673;
+    --neg: #9B3324;
+    --in: #21665A;
+    --caution: #9C6B08;
+    --overlay-bg: rgba(233, 237, 241, 0.9);
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    font-variant-numeric: tabular-nums;
+}
+
+.wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 56px 24px 80px;
+}
+
+h1 {
+    font-size: 2rem;
+    font-weight: 600;
+    letter-spacing: -.02em;
+    margin: 0 0 .35em;
+    max-width: 20ch;
+}
+
+.sub {
+    color: var(--muted);
+    margin: 0 0 1em;
+    max-width: 62ch;
+}
+
+.board {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    padding: 26px;
+    margin-bottom: 32px;
+}
+
+h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 0 0 14px;
+}
+
+/* Form Styles */
+.form-group {
+    margin-bottom: 1rem;
+}
+
+label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+}
+
+input[type="password"],
+select {
+    width: 100%;
+    max-width: 400px;
+    padding: 0.5rem;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 1rem;
+}
+
+button {
+    background: var(--pos);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+button:hover {
+    opacity: 0.9;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+#cancel-btn {
+    background: var(--neg);
+    margin-top: 1rem;
+}
+
+.hint {
+    display: block;
+    color: var(--muted);
+    font-size: .85rem;
+    margin-top: 0.25rem;
+}
+
+/* Overlay Styles */
+#loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: var(--overlay-bg);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+#loading-overlay.hidden {
+    display: none;
+}
+
+.overlay-content {
+    background: var(--panel);
+    padding: 2rem;
+    border-radius: 8px;
+    border: 1px solid var(--rule);
+    text-align: center;
+    max-width: 400px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+#loading-spinner {
+    width: 50px;
+    height: 50px;
+    margin-bottom: 1rem;
+}
+
+.eta {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 500;
+    color: var(--pos);
+    font-size: 1.1rem;
+}
+
+footer {
+    margin-top: 44px;
+    padding-top: 22px;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: .85rem;
+}
+
+/* Leaderboard Specific Overrides */
+.chart { width: 100%; height: auto; display: block; }
+.grid { stroke: var(--rule); stroke-width: 1; }
+.zero { stroke: var(--ink); stroke-width: 1.5; opacity: .55; }
+.axis { fill: var(--muted); font-size: 11px; }
+.ac { text-anchor: middle; }
+.ar { text-anchor: end; }
+.efflab { fill: var(--ink); font-size: 12.5px; }
+.depthlab { fill: var(--muted); font-size: 12.5px; font-weight: 500; }
+.delta { fill: var(--ink); font-size: 12px; font-weight: 600; text-anchor: start; }
+table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+caption { text-align: left; color: var(--muted); font-size: .84rem; padding-bottom: 12px; max-width: 64ch; }
+th, td { padding: 8px 6px; text-align: right; border-bottom: 1px solid var(--rule); }
+th { font-weight: 500; color: var(--muted); font-size: .8rem; }
+.lead, .model { text-align: left; }
+.model { font-family: "IBM Plex Mono", monospace; font-size: .78rem; }
+.clear { color: var(--in); font-weight: 600; }
+.weak { color: var(--caution); }
+.none { color: var(--muted); }

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STE Retention Experiment</title>
+    <link rel="stylesheet" href="static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="wrap">
+        <h1>STE Retention Experiment</h1>
+        <p class="sub">
+            Does naming a standard make a model follow it? This application runs a bounded experiment to test ASD-STE100 Simplified Technical English compliance across different models and context depths.
+        </p>
+
+        <div class="board">
+            <h2>Run an Experiment</h2>
+            <form id="experiment-form">
+                <div class="form-group">
+                    <label for="api-key">OpenRouter API Key:</label>
+                    <input type="password" id="api-key" name="api-key" required placeholder="sk-or-v1-...">
+                    <small class="hint">Your key is sent securely and used only for the duration of this request. It is never logged or stored.</small>
+                </div>
+                <div class="form-group">
+                    <label for="model">Model:</label>
+                    <select id="model" name="model" required>
+                        <option value="anthropic/claude-sonnet-4.5">Claude 3.5 Sonnet</option>
+                        <option value="openai/gpt-4o">GPT-4o</option>
+                        <option value="google/gemini-2.0-flash-001">Gemini 2.0 Flash</option>
+                    </select>
+                </div>
+                <button type="submit" id="run-btn">Run Bounded Experiment</button>
+            </form>
+        </div>
+
+        <div class="board">
+            <h2>Leaderboard</h2>
+            <div id="leaderboard-container">
+                <p>Loading leaderboard...</p>
+            </div>
+        </div>
+
+        <footer>
+            <p>Created by Jim Salsman</p>
+        </footer>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="hidden" aria-live="polite">
+        <div class="overlay-content">
+            <img src="static/loading.gif" alt="Loading..." id="loading-spinner">
+            <h2 id="status-message">Starting experiment...</h2>
+            <p id="eta-message" class="eta"></p>
+            <p class="hint">Please do not close this tab. The experiment will run safely within request limits.</p>
+            <button type="button" id="cancel-btn">Cancel</button>
+        </div>
+    </div>
+
+    <script src="static/app.js"></script>
+</body>
+</html>
