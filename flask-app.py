@@ -229,27 +229,36 @@ def _research_stream(data: dict, api_key: str) -> Response:
     The research path uses the same orchestrator as ``python -m ste.research``.
     It checkpoints each paid unit, and the API key stays only in this request.
     """
+    # Build the same validated configuration used by the command-line worker.
     model = data.get("model")
     sessions = data.get("sessions", 6)
     config = ResearchConfig((model,), sessions)
     config.validate()
+
+    # A missing handle creates a fresh study; a supplied handle must be path-safe.
     resume_id = data.get("resume_run_id")
     if resume_id in (None, ""):
+        # New state includes its own unguessable identifier and protocol versions.
         state = new_state(config)
     elif isinstance(resume_id, str) and RUN_ID.fullmatch(resume_id):
         # The explicit configuration prevents a run from resuming with new semantics.
         state = load_state(EXPERIMENTS / f"{resume_id}.json", config, resume_id)
     else:
         raise ValueError("The experiment run identifier is invalid.")
+
+    # Resolve storage only after validating the identifier embedded in the state.
     path = EXPERIMENTS / f"{state['run_id']}.json"
+    # Hold one lease from the initial running snapshot through generator cleanup.
     lease = acquire_lease(state["run_id"], EXPERIMENTS)
     state["status"] = "running"
     state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
     state["lease_expires_at"] = lease.expires_at.isoformat()
+    # Persist running metadata before response headers expose the stream to a client.
     save_state(path, state)
 
     def checkpoint(value: dict) -> None:
         """Save one credential-free research checkpoint and renew its lease."""
+        # Renew first so a failed or stolen fallback lease stops further state writes.
         expires = lease.heartbeat()
         value["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
         value["lease_expires_at"] = expires.isoformat()
@@ -259,12 +268,15 @@ def _research_stream(data: dict, api_key: str) -> Response:
     @stream_with_context
     def generate():
         """Translate research-worker events to independently valid NDJSON lines."""
+        # Timings cover only this request, not work restored from an earlier request.
         started = datetime.now(timezone.utc)
         completed = len(state["units"])
         completed_at_start = completed
+        # The validated workload gives every event a stable denominator.
         total = config.workload()["total_calls"]
         terminal = False
         try:
+            # Send the resume handle before any paid worker call can fail or time out.
             yield (
                 json.dumps(
                     {
@@ -278,11 +290,16 @@ def _research_stream(data: dict, api_key: str) -> Response:
                 )
                 + "\n"
             )
+
+            # The worker checkpoints each paid unit through the callback above.
             for worker_event in run_research(api_key, config, state, checkpoint):
+                # Clamp elapsed time defensively in case the wall clock moves backward.
                 elapsed = max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
                 if worker_event["type"] == "success":
+                    # Mark terminal before saving so exception handling cannot emit twice.
                     terminal = True
                     state["lease_expires_at"] = None
+                    # Commit the terminal snapshot before reporting success to the browser.
                     save_state(path, state)
                     event = {
                         "type": "success",
@@ -293,8 +310,10 @@ def _research_stream(data: dict, api_key: str) -> Response:
                         "run_id": state["run_id"],
                     }
                 else:
+                    # Every nonterminal worker event represents one newly durable call.
                     completed += 1
                     measured = completed - completed_at_start
+                    # Report persisted work, never speculative or in-flight work.
                     event = {
                         "type": "status",
                         "message": f"Saved research call {completed} of {total}.",
@@ -305,16 +324,22 @@ def _research_stream(data: dict, api_key: str) -> Response:
                     }
                     # An ETA needs at least two measured calls to be useful.
                     if measured >= 2 and elapsed > 0:
+                        # Extrapolate only from calls measured during this request.
                         event["eta_seconds"] = round(elapsed / measured * (total - completed), 1)
+                # NDJSON framing keeps each progress update independently parseable.
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         except Exception:  # noqa: BLE001
             if not terminal:
+                # Preserve completed paid work while making this snapshot resumable.
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
+                    # Saving error metadata is best effort because storage may have failed.
                     save_state(path, state)
                 except OSError:
+                    # The sanitized stream event remains useful when persistence is down.
                     pass
+                # Never expose provider exceptions, request data, or credentials.
                 yield (
                     json.dumps(
                         {
@@ -331,16 +356,22 @@ def _research_stream(data: dict, api_key: str) -> Response:
                     + "\n"
                 )
         finally:
+            # Generator close on browser cancellation skips the normal exception path.
             if not terminal and state.get("status") != "interrupted":
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
+                    # Make cancellation resumable before giving another request the lease.
                     save_state(path, state)
                 except OSError:
+                    # No response channel remains during close, so cleanup is best effort.
                     pass
+            # Release on success, failure, disconnection, cancellation, or early close.
             lease.release()
 
+    # Flask keeps the context available throughout lazy generator iteration.
     response = Response(generate(), content_type="application/x-ndjson")
+    # Disable proxy buffering and sniffing so progress arrives as framed NDJSON.
     response.headers.update(
         {
             "Cache-Control": "no-store",
@@ -406,15 +437,28 @@ def experiment_status(run_id: str):
 
 @app.delete("/api/experiments/<run_id>")
 def delete_experiment(run_id: str):
-    """Delete an explicitly identified experiment snapshot."""
+    """Delete an idle identified snapshot while holding its experiment lease."""
+    lease = None
     try:
         if not RUN_ID.fullmatch(run_id):
             raise RunStoreError("The experiment run identifier is invalid.")
         # The narrow identifier validation makes the derived path traversal-safe.
-        (EXPERIMENTS / f"{run_id}.json").unlink()
+        path = EXPERIMENTS / f"{run_id}.json"
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        # The same lease used by workers prevents a later checkpoint recreating the file.
+        lease = acquire_lease(run_id, EXPERIMENTS)
+        path.unlink()
         return Response(status=204)
+    except RunActiveError as exc:
+        # An active stream retains ownership and its durable resume snapshot.
+        return jsonify(error=str(exc)), 409
     except (OSError, RunStoreError) as exc:
         return jsonify(error=str(exc)), 404
+    finally:
+        if lease is not None:
+            # Release only after unlink completes, including storage-error paths.
+            lease.release()
 
 
 @app.after_request
