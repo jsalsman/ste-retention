@@ -58,9 +58,9 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         arms = paired.setdefault((model, run_id, session, depth, protocol, scoring), {})
         arms.setdefault(variant, []).append(_number(record.get("score")))
 
-    # Each tuple contains baseline, rule-detail, naming, and interaction effects.
-    grouped: dict[str, list[tuple[float, float, float, float]]] = {}
-    for (model, _run_id, _session, _depth, _protocol, _scoring), arms in paired.items():
+    # Each versioned group contains baseline, rule-detail, naming, and interaction effects.
+    grouped: dict[tuple[str, object, object], list[tuple[float, float, float, float]]] = {}
+    for (model, _run_id, _session, _depth, protocol, scoring), arms in paired.items():
         counts = {len(values) for values in arms.values()}
         if len(arms) != 4 or len(counts) != 1:
             # Never compare unmatched responses from different sessions or depths.
@@ -72,14 +72,22 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
             rule_effect = ((rules - bare) + (named_rules - named)) / 2
             naming_effect = ((named - bare) + (named_rules - rules)) / 2
             interaction = named_rules - named - rules + bare
-            grouped.setdefault(model, []).append((bare, rule_effect, naming_effect, interaction))
+            # Preserve both compatibility dimensions when aggregating complete cells.
+            grouped.setdefault((model, protocol, scoring), []).append(
+                (bare, rule_effect, naming_effect, interaction)
+            )
     rows = []
-    for model, contrasts in sorted(grouped.items()):
+    for (model, protocol, scoring), contrasts in sorted(
+        grouped.items(), key=lambda item: tuple(str(value) for value in item[0])
+    ):
         # Both displayed text and data attributes are escaped from external records.
         safe_model = html.escape(model, quote=True)
+        safe_protocol = html.escape(str(protocol), quote=True)
+        safe_scoring = html.escape(str(scoring), quote=True)
         means = [statistics.mean(values) for values in zip(*contrasts, strict=True)]
         rows.append(
             f'<tr data-model="{safe_model}"><th scope="row">{safe_model}</th>'
+            f"<td>{safe_protocol}</td><td>{safe_scoring}</td>"
             f"<td>{means[0]:.1f}</td><td>{means[1]:+.1f}</td>"
             f"<td>{means[2]:+.1f}</td><td>{means[3]:+.1f}</td>"
             f"<td>{len(contrasts)}</td></tr>"
@@ -93,7 +101,8 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         '<link rel="stylesheet" href="/static/styles.css"></head>'
         f'<body><main><p><a href="/">Back to experiment</a></p><h1>{html.escape(label)}</h1>{empty}'
         "<table><caption>Paired deterministic compliance-score contrasts.</caption>"
-        "<thead><tr><th>Model</th><th>Bare baseline</th><th>Rule effect</th>"
+        "<thead><tr><th>Model</th><th>Protocol version</th><th>Scoring version</th>"
+        "<th>Bare baseline</th><th>Rule effect</th>"
         "<th>Naming effect</th><th>Interaction</th><th>Paired observations</th></tr></thead>"
         f"<tbody>{''.join(rows)}"
         "</tbody></table></main></body></html>"
