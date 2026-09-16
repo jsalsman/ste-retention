@@ -4,6 +4,7 @@
 import argparse
 import os
 from pathlib import Path
+from uuid import uuid4
 
 from experiment import ALLOWED_MODELS, run_experiment, validate_run
 from records import append_records
@@ -35,6 +36,8 @@ def main() -> int:
     if input(f"Run {work} bounded paid requests? [y/N] ").strip().lower() != "y":
         return 0
     persisted = 0
+    # Each invocation is analytically distinct, even when a failed command is retried.
+    run_id = uuid4().hex
 
     def checkpoint(records: list[dict]) -> None:
         """Append only responses completed since the preceding durable checkpoint."""
@@ -47,7 +50,7 @@ def main() -> int:
             persisted = len(records)
 
     # Checkpoint callbacks run before progress is printed and survive a later provider failure.
-    for event in run_experiment(api_key, model, batches, turns, persist=checkpoint):
+    for event in run_experiment(api_key, model, batches, turns, persist=checkpoint, run_id=run_id):
         print(event["message"])
     return 0
 

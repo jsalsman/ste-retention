@@ -132,6 +132,8 @@ def run_experiment(
                 metrics = score_text(reply)
                 records.append(
                     {
+                        # A durable identifier keeps retries from contaminating paired analyses.
+                        "run_id": run_id,
                         "session": batch,
                         "model": model,
                         "variant": variant,

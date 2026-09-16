@@ -67,8 +67,8 @@ def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch
     response = client.get("/leaderboard")
     assert response.status_code == 200
     assert b"&lt;x&gt;" in response.data and b"<x>" not in response.data
-    assert b"Rule effect" in response.data and b"+10.0" in response.data
-    assert b"Naming effect" in response.data and b"+20.0" in response.data
+    assert b"Rule effect" in response.data and b"+15.0" in response.data
+    assert b"Naming effect" in response.data and b"+25.0" in response.data
 
 
 def test_interaction_validation_and_mocked_success(client, module, monkeypatch):
