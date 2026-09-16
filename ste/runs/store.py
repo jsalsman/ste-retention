@@ -171,6 +171,57 @@ def save_run(directory: Path, state: dict) -> None:
         os.replace(temporary, path)
 
 
+def _load_research_run(path: Path, run_id: str) -> dict:
+    """Load and validate the leaderboard-facing fields of a research snapshot."""
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        # Research files are read-only here, so malformed snapshots are never resumed.
+        raise RunStoreError("The research run is unavailable or malformed.") from exc
+    versions = (
+        state.get("schema_version") if isinstance(state, dict) else None,
+        state.get("protocol_version") if isinstance(state, dict) else None,
+        state.get("scoring_version") if isinstance(state, dict) else None,
+    )
+    # Keep research validation separate from the preview-only resume schema.
+    if versions != (SCHEMA_VERSION, PROTOCOL_VERSION, SCORING_VERSION):
+        raise RunStoreError("The research run uses an unsupported schema.")
+    if (
+        state.get("run_id") != run_id
+        or state.get("run_mode") != "research"
+        or state.get("status") not in {"pending", "running", "interrupted", "complete"}
+        or not isinstance(state.get("records"), list)
+    ):
+        raise RunStoreError("The research run is malformed.")
+    for record in state["records"]:
+        # The leaderboard consumes these identity, grouping, and numeric fields.
+        required = {"schema_version", "protocol_version", "scoring_version", "run_mode"}
+        required.update({"run_id", "session", "model", "variant", "depth", "score"})
+        score = record.get("score") if isinstance(record, dict) else None
+        valid_score = (
+            not isinstance(score, bool)
+            and isinstance(score, (int, float))
+            and math.isfinite(score)
+            and 0 <= score <= 100
+        )
+        if (
+            not isinstance(record, dict)
+            or not required.issubset(record)
+            or record["schema_version"] != SCHEMA_VERSION
+            or record["protocol_version"] != PROTOCOL_VERSION
+            or record["scoring_version"] != SCORING_VERSION
+            or record["run_mode"] != "research"
+            or record["run_id"] != run_id
+            or record["variant"] not in VALID_VARIANTS
+            or type(record["session"]) is not int
+            or type(record["depth"]) is not int
+            or not isinstance(record["model"], str)
+            or not valid_score
+        ):
+            raise RunStoreError("The research run contains an inconsistent record.")
+    return state
+
+
 def completed_records(directory: Path) -> list[dict]:
     """Collect records only from successfully completed snapshots for leaderboard use."""
     if not directory.is_dir():
@@ -178,8 +229,13 @@ def completed_records(directory: Path) -> list[dict]:
     records: list[dict] = []
     for path in sorted(directory.glob("*.json")):
         try:
-            state = load_run(directory, path.stem)
-        except RunStoreError:
+            # Dispatch on the minimal mode marker before applying a mode-specific schema.
+            candidate = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(candidate, dict) and candidate.get("run_mode") == "research":
+                state = _load_research_run(path, path.stem)
+            else:
+                state = load_run(directory, path.stem)
+        except (OSError, json.JSONDecodeError, RunStoreError):
             # One damaged run must not make all valid leaderboard data unavailable.
             continue
         if state["status"] == "complete" and state.get("run_mode") == "research":

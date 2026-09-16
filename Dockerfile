@@ -11,8 +11,8 @@ RUN python -m pip install --no-cache-dir -r requirements.txt \
     && addgroup --system app \
     && adduser --system --ingroup app --home /app app
 
-COPY flask-app.py index.html leaderboard_preview.html ./
-COPY originals/leaderboard_preview.html ./originals/leaderboard_preview.html
+# The runtime entry point imports the packaged implementation and serves the standalone page.
+COPY flask-app.py index.html ./
 COPY ste ./ste
 COPY static ./static
 RUN chown -R app:app /app
@@ -21,7 +21,7 @@ USER app
 # Parse every shipped HTML document as Jinja syntax, including documents that do
 # not use template expressions, then compile all application modules.
 RUN python -c "from pathlib import Path; from jinja2 import Environment; environment = Environment(); [environment.parse(path.read_text(encoding='utf-8')) for path in Path('.').rglob('*.html')]" \
-    && python -m compileall -q flask-app.py ste
+    && python -m compileall . -q
 
 # Start the production server during the image build and smoke-test both the
 # Cloud Run health endpoint and the root application document.
@@ -35,4 +35,4 @@ RUN set -eu; \
 
 EXPOSE 8080
 # gthread efficiently overlaps provider and disk waits; exec preserves signal forwarding.
-CMD exec gunicorn --bind "0.0.0.0:${PORT:-8080}" --worker-class gthread --workers "${WORKERS:-2}" --threads "${THREADS:-4}" --timeout 270 --graceful-timeout 30 flask-app:app
+CMD exec gunicorn --bind "0.0.0.0:${PORT:-8080}" --worker-class gthread --workers "${WORKERS:-1}" --threads "${THREADS:-4}" --timeout 270 --graceful-timeout 30 flask-app:app

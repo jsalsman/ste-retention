@@ -21,7 +21,7 @@ These package organization, full prompt pool, probe depths, complete instruction
 
 ## Setup and local quality gates
 
-Use a supported standard CPython runtime. This workload waits on networks and files; no measured result justified compiling a custom free-threaded interpreter. Production uses pinned `python:3.14.7-slim-trixie`, Gunicorn `gthread`, two workers by default, and a non-root user. Multiple workers are safe only when production run ownership is transactional as discussed below.
+Use CPython 3.14.7 or newer. This workload waits on networks and files; no measured result justified compiling a custom free-threaded interpreter. Production uses pinned `python:3.14.7-slim-trixie`, Gunicorn `gthread`, one worker by default, and a non-root user. Multiple workers are safe only when production run ownership is transactional as discussed below.
 
 ```sh
 python -m venv .venv
