@@ -1,0 +1,22 @@
+/* The visual system emphasizes readable contrast and clear keyboard focus. */
+:root { color-scheme: light; --ink:#172331; --muted:#546474; --paper:#f3f6f8; --panel:#fff; --accent:#145f72; --line:#c8d4dc; --danger:#9b3027; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.6 system-ui,sans-serif; }
+header { display:flex; justify-content:space-between; gap:1rem; padding:1rem max(1rem,calc((100% - 980px)/2)); background:var(--ink); }
+header a { color:#fff; } .brand { font-weight:700; text-decoration:none; }
+main { max-width:980px; margin:auto; padding:3rem 1rem 5rem; }
+h1 { max-width:22ch; font-size:clamp(2rem,5vw,3.7rem); line-height:1.08; } h2 { margin-top:0; }
+.eyebrow { color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
+.notice,.card { background:var(--panel); border:1px solid var(--line); border-radius:.6rem; padding:1.3rem; margin-top:1.5rem; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1.2rem; }
+label { display:block; margin-top:.8rem; font-weight:700; }
+input,select,textarea,button { width:100%; padding:.7rem; margin-top:.25rem; border:1px solid #718392; border-radius:.3rem; font:inherit; }
+textarea { min-height:8rem; resize:vertical; } button { margin-top:1rem; background:var(--accent); color:#fff; border:0; font-weight:700; cursor:pointer; }
+button.secondary { background:#5d6872; } button:disabled { cursor:not-allowed; opacity:.55; }
+:focus-visible { outline:3px solid #e09022; outline-offset:2px; }
+.help,.status { color:var(--muted); } .status { min-height:1.6em; margin-top:1rem; }
+.result { min-height:4rem; padding:1rem; white-space:pre-wrap; overflow-wrap:anywhere; background:#edf2f5; border-left:4px solid var(--accent); }
+.overlay { position:fixed; inset:0; z-index:10; display:grid; place-items:center; background:rgb(10 22 30 / 78%); }
+.overlay[hidden] { display:none; } .overlay-card { width:min(90%,420px); text-align:center; background:#fff; padding:2rem; border-radius:.7rem; }
+.overlay img { display:block; margin:auto; } table { width:100%; border-collapse:collapse; background:#fff; } th,td { padding:.7rem; border:1px solid var(--line); text-align:left; }
+@media (prefers-reduced-motion:reduce) { .overlay img { visibility:hidden; } *,*::before,*::after { scroll-behavior:auto !important; animation:none !important; } }
