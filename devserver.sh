@@ -1,20 +1,11 @@
 #!/bin/sh
+# Reloading local launcher; install requirements-dev.txt separately before use.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
 
-if [ ! -d ".venv" ]; then
-    echo "Virtual environment not found. Creating one..."
-    python3 -m venv .venv
-fi
-
-# Activate the virtual environment
-. .venv/bin/activate
-
-if [ -f "requirements.txt" ]; then
-    echo "Installing dependencies from requirements.txt..."
-    pip install --upgrade pip
-    pip install --no-cache-dir --uploaded-prior-to P7D -r requirements.txt
-else
-    echo "Warning: requirements.txt not found."
-fi
-
-echo "Starting Flask debug server"
-python -u -m flask --app flask-app run --host=0.0.0.0 -p ${PORT:-8080} --debug
+# Refuse to imply concurrency parity when the local interpreter still has a GIL.
+python -c "import sys, sysconfig; assert sysconfig.get_config_var('Py_GIL_DISABLED') == 1 and not sys._is_gil_enabled(), 'Python 3.14t is required'"
+# gthread mirrors production with standard native threads throughout.
+exec gunicorn --reload --bind "0.0.0.0:${PORT:-8080}" --worker-class gthread \
+  --workers 1 --threads "${THREADS:-4}" --timeout 240 flask-app:app

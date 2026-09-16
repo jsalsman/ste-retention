@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>STE Retention Lab — Jim Salsman</title>
+  <link rel="stylesheet" href="static/styles.css">
+  <script src="static/app.js" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/">Jim Salsman · STE Retention Lab</a><a href="/leaderboard">Leaderboard</a></header>
+  <main>
+    <section aria-labelledby="intro-title">
+      <p class="eyebrow">Controlled-language research</p>
+      <h1 id="intro-title">Does naming a writing standard help a model retain it?</h1>
+      <p>This bounded experiment compares four ASD-STE100 prompt variants as a conversation grows. Interactive runs are intentionally small; full studies belong in a Cloud Run Job or another asynchronous worker.</p>
+      <div class="notice"><strong>Runtime limit:</strong> Streaming keeps this page informed, but it does not extend Cloud Run’s request deadline.</div>
+    </section>
+
+    <section class="card" aria-labelledby="credentials-title">
+      <h2 id="credentials-title">Connection</h2>
+      <label for="api-key">OpenRouter API key</label>
+      <input id="api-key" type="password" autocomplete="off" spellcheck="false" required>
+      <p class="help">Your key is sent only in the HTTPS request body, retained only during that request, and never stored, logged, displayed, or written to results.</p>
+      <label for="model">Model</label>
+      <select id="model">
+        <option value="google/gemini-2.0-flash-001">Gemini 2.0 Flash</option>
+        <option value="openai/gpt-4o">GPT-4o</option>
+        <option value="anthropic/claude-sonnet-4.5">Claude Sonnet 4.5</option>
+        <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+      </select>
+    </section>
+
+    <section class="grid">
+      <form id="chat-form" class="card">
+        <h2>Try one prompt</h2>
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" maxlength="2000" required placeholder="Ask for a short technical explanation"></textarea>
+        <button type="submit">Ask model</button>
+        <div id="chat-status" class="status" role="status" aria-live="polite"></div>
+        <pre id="chat-result" class="result" tabindex="0">No model response yet.</pre>
+      </form>
+
+      <form id="experiment-form" class="card">
+        <h2>Run a bounded experiment</h2>
+        <label for="batches">Batches (maximum 2)</label>
+        <input id="batches" type="number" min="1" max="2" value="1" required>
+        <label for="turns">Turns per variant (maximum 3)</label>
+        <input id="turns" type="number" min="1" max="3" value="1" required>
+        <label for="resume-run-id">Resume run ID (optional)</label>
+        <input id="resume-run-id" type="text" inputmode="text" pattern="[a-f0-9]{32}" maxlength="32" autocomplete="off">
+        <p class="help">After a disconnect, enter the displayed run ID with the same model and controls. Completed work will not be repeated.</p>
+        <button id="check-run" type="button" class="secondary">Check run status</button>
+        <button type="submit">Start experiment</button>
+        <button id="cancel" type="button" class="secondary" disabled>Cancel</button>
+        <div id="experiment-status" class="status" role="status" aria-live="polite">Ready for a bounded run.</div>
+        <div id="experiment-result" class="result" tabindex="0">Results and a resumable run ID will appear here.</div>
+      </form>
+    </section>
+  </main>
+
+  <div id="loading-overlay" class="overlay" hidden aria-hidden="true">
+    <div class="overlay-card" role="status" aria-live="polite" aria-atomic="true">
+      <img src="static/loading.gif" alt="" width="96" height="96">
+      <p id="overlay-message">Starting the experiment…</p>
+      <p id="overlay-eta"></p>
+    </div>
+  </div>
+</body>
+</html>
