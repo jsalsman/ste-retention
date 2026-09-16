@@ -16,9 +16,9 @@ from ste.orchestration import (
     VARIANTS,
     estimate_batch_cost,
     get_incomplete_session,
-    get_records_file,
     run_session_generator,
 )
+from ste.orchestration.io import append_record, get_records_file
 from ste.scoring import load_approved_words
 
 MODELS = [
@@ -110,17 +110,23 @@ def main():
                             api_key,
                             judge_model=JUDGE_MODEL,
                         ):
-                            if event["type"] == "record":
+                            if event["type"] in ("session_start", "turn_complete"):
+                                from datetime import datetime, timezone
+
+                                heartbeat = {
+                                    "type": "heartbeat_" + event["type"],
+                                    "session": session_id,
+                                    "model": model,
+                                    "variant": variant,
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                }
+                                append_record(heartbeat, RECORDS_FILE)
+                            elif event["type"] == "record":
                                 r = event["record"]
                                 d = r["depth"]
                                 score = r["score"]
                                 obs.setdefault((session_id, model, d), {})[variant] = score
-
-                                import json
-
-                                with open(RECORDS_FILE, "a", encoding="utf-8") as fh:
-                                    fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-
+                                append_record(r, RECORDS_FILE)
                     except Exception as exc:
                         print(f"  {model} s{session_id} {variant}: {exc}")
                         continue

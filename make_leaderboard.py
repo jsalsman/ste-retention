@@ -9,7 +9,7 @@ import os
 import sys
 
 from ste.leaderboard import generate_leaderboard_html
-from ste.orchestration import get_records_file
+from ste.orchestration.io import get_records_file
 
 RECORDS_FILE = get_records_file()
 OUTPUT_HTML = "leaderboard.html"

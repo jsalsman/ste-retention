@@ -3,6 +3,7 @@ import math
 import os
 import random
 from collections import deque
+from datetime import datetime, timezone
 
 from flask import Flask, Response, jsonify, request, send_file, stream_with_context
 
@@ -11,9 +12,9 @@ from ste.orchestration import (
     TASK_PROMPTS,
     VARIANTS,
     get_incomplete_session,
-    get_records_file,
     run_session_generator,
 )
+from ste.orchestration.io import append_record, get_records_file
 from ste.scoring import load_approved_words
 
 app = Flask(__name__)
@@ -90,6 +91,16 @@ def experiment_stream():
         completed_turns = 0
         turn_times = deque(maxlen=4)
 
+        def write_heartbeat(ev_type, variant):
+            heartbeat = {
+                "type": "heartbeat_" + ev_type,
+                "session": session_id,
+                "model": model,
+                "variant": variant,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            append_record(heartbeat, RECORDS_FILE)
+
         try:
             yield (
                 json.dumps(
@@ -114,7 +125,11 @@ def experiment_stream():
                     api_key,
                     judge_model=JUDGE_MODEL,
                 ):
-                    if event["type"] == "turn_complete":
+                    if event["type"] == "session_start":
+                        write_heartbeat("session_start", variant)
+
+                    elif event["type"] == "turn_complete":
+                        write_heartbeat("turn_complete", variant)
                         completed_turns += 1
                         turn_times.append(event["turn_time"])
 
@@ -140,8 +155,7 @@ def experiment_stream():
                         )
 
                     elif event["type"] == "record":
-                        with open(RECORDS_FILE, "a", encoding="utf-8") as fh:
-                            fh.write(json.dumps(event["record"], ensure_ascii=False) + "\n")
+                        append_record(event["record"], RECORDS_FILE)
 
             yield (
                 json.dumps(

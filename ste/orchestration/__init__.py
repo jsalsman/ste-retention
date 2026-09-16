@@ -159,15 +159,6 @@ def analyse(obs):
     return out
 
 
-def get_records_file():
-    """Returns the correct path for records depending on Cloud Run environment."""
-    import os
-
-    if os.path.exists("/experiments") and os.path.isdir("/experiments"):
-        return "/experiments/records.jsonl"
-    return "ste_retention_run/records.jsonl"
-
-
 def parse_iso8601(timestamp_str):
     """Fallback datetime parsing for python < 3.11"""
     try:
