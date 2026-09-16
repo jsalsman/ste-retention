@@ -75,7 +75,13 @@ def run_experiment(
     total = batches * turns * len(VARIANTS)
     started = clock()
     durations: list[float] = []
-    records: list[dict] = list(existing_records or [])
+    # Copy checkpoints so normalization never mutates state owned by the caller.
+    records: list[dict] = [dict(record) for record in existing_records or []]
+    if run_id is not None:
+        for record in records:
+            # Snapshots written before durable IDs belong to the run being resumed.
+            if record.get("run_id") is None:
+                record["run_id"] = run_id
     completed_keys = {
         (record.get("session"), record.get("variant"), record.get("depth")) for record in records
     }

@@ -39,6 +39,10 @@ def test_resume_skips_saved_unit_and_rebuilds_context():
     assert len(requests) == 7
     assert any(message["content"] == "Previously saved answer" for message in requests[0])
     assert len(checkpoints) == 7 and len(checkpoints[-1]) == 8
+    # A resumed legacy arm and every newly generated arm retain one run identity.
+    assert {record["run_id"] for record in checkpoints[-1]} == {"a" * 32}
+    # Normalizing the checkpoint must not alter the caller's in-memory snapshot.
+    assert "run_id" not in saved
     assert events[0]["completed"] == 1 and events[-1]["type"] == "success"
     assert all("sample-secret" not in str(event) for event in events)
 

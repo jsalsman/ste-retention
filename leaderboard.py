@@ -43,8 +43,10 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
             generation, seen = legacy_state.setdefault(model, (0, set()))
             coordinate = (session, variant, depth)
             if coordinate in seen:
+                # A repeated coordinate starts a new inferred legacy generation.
                 generation, seen = generation + 1, set()
             seen.add(coordinate)
+            # Store the reset set so later records join only this generation.
             legacy_state[model] = (generation, seen)
             run_id = ("legacy", generation)
         # Repeated arms can still represent replicated observations within an explicit run.
