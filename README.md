@@ -65,3 +65,7 @@ The experiment crosses two factors. This makes four prompt variants.
 1. Obtain your official ASD-STE100 standard and build `approved_words.txt` based on the official dictionary. Do not commit this list to source control.
 2. The CLI implementation `ste_retention.py` allows testing multiple models over sequential batches to test for statistical significance bounds.
 3. The results aggregate into `ste_retention_run/records.jsonl`.
+
+---
+
+*This repository has been fully modernized and refactored from a procedural CLI script into a scalable, multi-tenant Flask web application using native Python 3.14t free-threading, safe bounded execution, and robust liveness tracking.*
