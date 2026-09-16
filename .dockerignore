@@ -9,6 +9,3 @@ tests
 *.jsonl
 .env*
 approved_words.txt
-leaderboard.html
-leaderboard_preview.html
-ste_retention_run

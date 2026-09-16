@@ -5,8 +5,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from run_lease import RunActiveError, acquire_lease
-from run_store import create_run, save_run
+from ste.runs.lease import RunActiveError, acquire_lease
+from ste.runs.store import create_run, save_run
 
 
 def test_same_run_lease_has_one_native_thread_owner(tmp_path):

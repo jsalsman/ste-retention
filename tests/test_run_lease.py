@@ -2,7 +2,7 @@
 
 import pytest
 
-from run_lease import RunActiveError, acquire_lease
+from ste.runs.lease import RunActiveError, acquire_lease
 
 
 def test_local_lease_rejects_concurrent_owner_and_allows_release(tmp_path):
@@ -22,7 +22,7 @@ def test_local_lease_rejects_concurrent_owner_and_allows_release(tmp_path):
 
 def test_unsupported_flock_uses_timestamp_fallback(tmp_path, monkeypatch):
     """Use live timestamp metadata when a FUSE implementation rejects file locking."""
-    import run_lease
+    import ste.runs.lease as run_lease
 
     def unsupported(*_args):
         """Represent a mounted filesystem without flock support."""
