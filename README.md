@@ -3,6 +3,170 @@
 This project answers one question. Does a model follow a writing standard
 better when you give the standard a name?
 
+It also provides a small Flask research interface by Jim Salsman. The interface
+supports one-off model interaction, bounded on-demand previews, and safe viewing
+of persisted results. It does **not** silently run a study during a page request.
+
+## Architecture and repository layout
+
+- `flask-app.py` exposes `app` for Gunicorn and owns HTTP validation, errors,
+  request context, and NDJSON serialization.
+- `experiment.py` validates strict interactive limits and emits transport-neutral
+  progress dictionaries. `openrouter.py` accepts the API key explicitly.
+- `scoring.py`, `statistics_utils.py`, `records.py`, and `leaderboard.py` isolate
+  scoring, statistics, JSONL persistence, and escaped HTML rendering.
+- `run_store.py` writes credential-free per-run snapshots and validates resume
+  identifiers and persisted schema before any additional paid work.
+- `ste_retention.py` and `make_leaderboard.py` are thin command-line entry points.
+- Root `index.html` is standalone. `static/styles.css` and `static/app.js` provide
+  presentation and behavior; no `templates/` directory is used.
+
+The JSONL record shape remains compatible with the original unversioned format:
+each object contains `session`, `model`, `variant`, `depth`, `score`, optional
+`metrics`, and response `text`. Readers report malformed input with its line
+number. If a future schema changes these meanings, add a `schema_version` and a
+reader migration before changing writers.
+
+## Setup and local development
+
+Use a free-threaded Python 3.14 build (`python3.14t`). The development launcher
+checks both `Py_GIL_DISABLED` and the runtime GIL state before it starts. Keep
+installation separate from server startup:
+
+```sh
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements-dev.txt
+./devserver.sh                 # honors PORT, default 8080
+```
+
+The reloading development Gunicorn process is for local work only. Production
+also uses Gunicorn but without reload mode.
+The web page explains credentials and request limits, offers accessible live
+status and empty states, and links to `/leaderboard`. `GET /healthz` is a local
+health check and never calls OpenRouter.
+
+## Web interaction and bounded runs
+
+The interaction endpoint accepts one prompt. The experiment endpoint permits at
+most two batches and three turns across four variants. Every model, string,
+integer, body size, and total workload is checked before response streaming
+starts. These previews are intentionally much smaller than the research CLI.
+
+Each web run receives a 32-character run ID. The server checkpoints every
+completed response before reporting that unit to the browser. To resume after a
+timeout or disconnect, submit that run ID with the same model, batch count, and
+turn count plus a fresh API key. Saved answers reconstruct conversation context,
+so completed paid calls are skipped. Keys and authorization headers never enter
+the snapshot. An ordinary nonblocking file lease permits only one request to own
+a run ID; a concurrent resume receives HTTP 409 rather than repeating paid work.
+Different users and different run IDs use separate files and proceed safely.
+
+`GET /api/experiments/<run-id>/status` returns safe status, completed and total
+counts, `heartbeat_at`, `lease_expires_at`, and a derived `liveness` value of
+`active`, `stalled`, or `complete`. Each checkpoint renews the 120-second lease.
+If an instance disappears without cleanup, the timestamp expires and another
+request can claim and resume the stalled run.
+
+`POST /api/experiments/stream` returns `application/x-ndjson`. Events include:
+
+```json
+{"type":"status","message":"safe text","completed":2,"total":12,"elapsed_seconds":4.1,"eta_seconds":20.5}
+{"type":"success","message":"Experiment complete.","completed":12,"total":12,"elapsed_seconds":25.0,"records":[]}
+```
+
+An initial status arrives promptly, statuses separate work units, and exactly
+one `success` or sanitized `error` terminates the stream. ETA appears only after
+multiple measured units and is a smoothed, approximate duration. There is no
+percentage or completion bar. Browser code uses `fetch`, `ReadableStream`,
+`TextDecoder`, and a retained partial-line buffer. It renders all remote text
+with `textContent`. The loading GIF overlay is an ARIA live region; cancellation,
+failure, disconnection, and premature stream closure always restore controls.
+
+Streaming keeps the browser informed but **does not extend Cloud Run's request
+deadline**. Full experiments require a future Cloud Run Job, queue, or other
+asynchronous worker. The caps target a safety margin under the configured
+240-second Gunicorn timeout, but upstream latency still varies.
+
+## Credentials and production security
+
+The CLI reads `OPENROUTER_API_KEY` only as a convenient input and passes it into
+the reusable layer explicitly. The browser sends a key only in an HTTPS JSON
+request body and clears the field after a terminal outcome. Keys never belong in
+URLs, cookies, storage, HTML, logs, exceptions, progress events, JSONL, or
+leaderboards. Upstream response details are replaced with stable safe errors.
+
+Before enabling public paid inference, add user authentication, per-user and
+global rate limits, spending controls, abuse detection, request audit metadata
+that excludes content and secrets, and appropriate Cloud Armor/IAM controls.
+Never deploy the service over plain HTTP outside a trusted local environment.
+
+## Leaderboards and persistence
+
+Run `python make_leaderboard.py` to read
+`ste_retention_run/records.jsonl` and write `leaderboard.html`. Pure functions
+can instead return an HTML string. External values are escaped and numeric
+scores must be finite and between 0 and 100. The web route returns a helpful 404
+when records do not exist; it never starts an experiment. The committed preview
+is synthetic and must remain clearly labeled as such.
+
+Cloud Run's ordinary writable filesystem is ephemeral. The service uses
+`EXPERIMENTS_DIR=/experiments` by default, which matches the intended writable
+Cloud Storage FUSE mount. Both snapshots and timestamped lease files use only
+ordinary access through that mounted directory. The service first attempts a
+nonblocking `flock`; if the mount reports locking as unsupported, it falls back
+to checking and updating the lease timestamps under a process-local guard. This
+fallback is deliberately best-effort across instances because Cloud Storage
+FUSE does not promise POSIX file-lock semantics. With the expected small user
+count it prevents ordinary duplicate resumes, but it cannot eliminate every
+simultaneous cross-instance race. Grant the runtime service account object read,
+create, update, and delete access. Local development can set `EXPERIMENTS_DIR`
+to a writable temporary directory. A database is the upgrade path if strict
+transactional job claiming becomes necessary.
+
+## Quality checks
+
+```sh
+pytest
+ruff check .
+ruff format --check .
+python -m compileall -q flask-app.py experiment.py leaderboard.py openrouter.py records.py run_lease.py run_store.py scoring.py statistics_utils.py
+```
+
+Tests import the hyphenated entry point safely and mock every inference request;
+they never need a live key or paid call. We intentionally do not add Docker-build
+tests. If Hadolint is already installed, `hadolint Dockerfile` is an optional
+lightweight syntax/style check; do not install a large toolchain just for it.
+
+The image compiles CPython 3.14 with `--disable-gil`, verifies both its build flag
+and runtime GIL state, and contains no cooperative-concurrency dependency.
+Gunicorn's `gthread` worker uses native threads; `THREADS` defaults to 4. Shared mutable
+lease and snapshot registries are protected by explicit `threading.Lock`
+instances, while experiment prompt configuration is immutable. The container
+runs as a non-root user and expands `${PORT:-8080}` in an `exec`-form shell
+command so Gunicorn receives signals correctly. Deploy from the repository root,
+for example:
+
+```sh
+gcloud run deploy ste-retention --source . --region REGION --allow-unauthenticated \
+  --timeout 300 \
+  --set-env-vars=PYTHONUNBUFFERED=1,EXPERIMENTS_DIR=/experiments,THREADS=4
+```
+
+Do not place a shared OpenRouter key in that environment for this bring-your-own-
+key UI. For authenticated server-owned inference, use Secret Manager and a
+separate authorization design.
+
+## Troubleshooting
+
+- A 400 response means validation failed before paid work; check model and caps.
+- A 502 or streamed error means the provider rejected, timed out, or malformed a
+  response. The details are intentionally sanitized; verify the key at OpenRouter.
+- A leaderboard 404 means no durable records were mounted or generated.
+- If a proxy buffers events, preserve `X-Accel-Buffering: no` and no-cache headers.
+- If the stream closes early, the browser reports an error and restores controls;
+  retry with less work rather than assuming the experiment completed.
+
 ## The question
 
 You can ask a model to write in a controlled style in two ways. You can name the
@@ -68,10 +232,10 @@ Pocock boundary for six looks at a two-sided 0.05 level.
 
 ## Before you start
 
-You need Python 3.9 or later. You need one package:
+You need free-threaded Python 3.14 (`python3.14t`). Install production packages with:
 
 ```
-pip install requests
+pip install -r requirements.txt
 ```
 
 You need an OpenRouter key. One key gives access to all the models.
@@ -117,10 +281,10 @@ those rules. Read the limits section before you use the scores.
 
 ## How to run the experiment
 
-1. Open `ste_retention.py` in a text editor.
-2. Change the globals at the top of the file if necessary.
+1. Review the strict caps shown by `python ste_retention.py --help`.
+2. Select the model, batches, turns, and optional records path with CLI flags.
 3. Run `python ste_retention.py`.
-4. Read the cost estimate. Type `y` to start.
+4. Review the paid request count. Type `y` to start.
 5. Run `python make_leaderboard.py` when the experiment stops.
 6. Open `leaderboard.html` in a browser.
 
@@ -128,13 +292,12 @@ those rules. Read the limits section before you use the scores.
 
 ### `ste_retention.py`
 
-This file runs the experiment. It also holds all the controls.
+This file is a thin CLI around the reusable bounded experiment orchestrator.
 
-**Globals.** The controls are at the top of the file, after the imports. There
-is no configuration file. The controls set the model list, the four constraint
-strings, the probe depths, the batch size, the budget, and the judge model. Two
-flags control the judge. The `PRICING` table gives approximate prices. The
-prices are for the cost estimate only. They do not change the experiment.
+**Configuration.** CLI flags choose a supported model and bounded workload.
+The CLI reads `OPENROUTER_API_KEY`, confirms the paid request count, and passes
+the key explicitly to `experiment.py`; reusable functions never read global
+credential state.
 
 **Cost estimate.** The script calculates the cost of one batch before it starts.
 It asks you to confirm. The estimate includes the input tokens, the output
@@ -218,11 +381,11 @@ the real experiment, the same code writes a new file with true data.
 
 ## Cost
 
-The default settings cost about 5.92 USD for each batch. Most runs stop after
-two or three batches. A complete run therefore costs about 12 to 18 USD.
-
-Longer probes cost more. The extensions cost about 14.24 USD and 33.64 USD for
-each batch. The script shows the new cost when it extends the depth.
+OpenRouter pricing changes and depends on model and tokens. The application does
+not claim a price estimate; inspect current provider pricing and spending limits
+before confirming any run. The web preview is capped at 24 calls, and the CLI
+uses the same bounded orchestrator. Larger research runs require an explicitly
+designed asynchronous worker and budget controls.
 
 ## Limits of this work
 
