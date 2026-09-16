@@ -32,7 +32,8 @@ def client(module):
 def test_public_routes_and_assets(client):
     """Serve the standalone page, health probe, assets, and method errors."""
     assert b"Jim Salsman" in client.get("/").data
-    assert client.get("/healthz").json == {"status": "ok"}
+    assert client.get("/api/healthz").json == {"status": "ok"}
+    assert client.get("/healthz").status_code == 404
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/styles.css").status_code == 200
     assert client.get("/static/loading.gif").status_code == 200
