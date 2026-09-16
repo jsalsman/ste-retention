@@ -1,68 +1,38 @@
-# Dockerfile
-# Deployed on Google Cloud Run.
+# Standard CPython plus gthread is appropriate for this network/filesystem-bound service.
+FROM python:3.14.7-slim-trixie
 
-FROM python:3.14.4-trixie
-
-# Prevent Python from buffering stdout/stderr (important for Cloud Run logging)
-ENV PYTHONUNBUFFERED=1
-
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
-
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# Install Python dependencies first (layer caching)
-COPY requirements.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir --uploaded-prior-to P7D -r requirements.txt
+# Install runtime dependencies separately for effective layer caching.
+COPY requirements.txt ./
+RUN python -m pip install --no-cache-dir -r requirements.txt \
+    && addgroup --system app \
+    && adduser --system --ingroup app --home /app app
 
-# Copy application code
-COPY flask-app.py index.html /app/
-COPY static/ /app/static/
+# The runtime entry point imports the packaged implementation and serves the standalone page.
+COPY flask-app.py index.html ./
+COPY ste ./ste
+COPY static ./static
+RUN chown -R app:app /app
+USER app
 
-# Python compilation check
-RUN python -m compileall . -q -j 0
+# Parse every shipped HTML document as Jinja syntax, including documents that do
+# not use template expressions, then compile all application modules.
+RUN python -c "from pathlib import Path; from jinja2 import Environment; environment = Environment(); [environment.parse(path.read_text(encoding='utf-8')) for path in Path('.').rglob('*.html')]" \
+    && python -m compileall . -q
 
-# Validate Jinja templates
-RUN python -c "print('import sys\nfrom jinja2 import Environment, FileSystemLoader\nenv = Environment(loader=FileSystemLoader(\".\"))\nfailed = False\nfor template in env.list_templates():\n    if template.endswith(\".html\"):\n        try:\n            env.get_template(template)\n        except Exception as e:\n            print(f\"Syntax error in {template}: {e}\")\n            failed = True\nif failed:\n    sys.exit(1)')" \
-    > validate_templates.py \
-    && python validate_templates.py \
-    && rm validate_templates.py
-
-# Devserver smoketest
-RUN set -eux; \
-    echo 'Starting dev server' && \
-    python -u -m flask --app flask-app run --host=0.0.0.0 -p 8080 & \
-    server_pid=$! && \
-    trap "kill $server_pid || true" EXIT && \
-    echo 'Making sure dev server responds with expected content' && \
-    success=0 && \
-    i=0; \
-    sleep 6; \
-    while [ $i -lt 10 ]; do \
-      if curl -sS http://localhost:8080 > /tmp/response.html && grep -q "Jim Salsman" /tmp/response.html; then \
-        echo "Smoke test passed: expected content found in response."; \
-        success=1; \
-        break; \
-      fi; \
-      echo "Waiting for server to start..."; \
-      sleep 3; \
-      i=$((i+1)); \
-    done && \
-    if [ $success -eq 0 ]; then \
-      echo 'Head and tail of bad response:'; \
-      head /tmp/response.html || true; \
-      tail /tmp/response.html || true; \
-      echo 'Smoke test failed: dev server did not serve expected content.'; \
-      exit 1; \
-    fi
-
-# Ownership of everything by the non-root user
-RUN chown -R appuser:appuser /app
-
-USER appuser
+# Start the production server during the image build and smoke-test both the
+# Cloud Run health endpoint and the root application document.
+RUN set -eu; \
+    gunicorn --bind 127.0.0.1:8080 --worker-class gthread --workers 1 \
+      --threads 2 --timeout 30 flask-app:app & \
+    server_pid=$!; \
+    trap 'kill "$server_pid" 2>/dev/null || true' EXIT; \
+    sleep 2; \
+    python -c "import json, urllib.request; url='http://127.0.0.1:8080/api/healthz'; health=json.load(urllib.request.urlopen(url, timeout=5)); assert health == {'status': 'ok'}; page=urllib.request.urlopen('http://127.0.0.1:8080/', timeout=5).read().decode(); assert 'Jim Salsman' in page"
 
 EXPOSE 8080
-
-# Keep the sole worker alive for the documented two-minute upload window while
-# application-level atlas caps bound synchronous PocketSphinx work per request.
-CMD ["python", "-m", "gunicorn", "-b", ":8080", "-k", "gevent", "-w", "1", "--timeout", "120", "flask-app:app"]
+# gthread efficiently overlaps provider and disk waits; exec preserves signal forwarding.
+CMD exec gunicorn --bind "0.0.0.0:${PORT:-8080}" --worker-class gthread --workers "${WORKERS:-1}" --threads "${THREADS:-4}" --timeout 270 --graceful-timeout 30 flask-app:app

@@ -1,0 +1,29 @@
+[tool.ruff]
+exclude = ["originals"]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "D", "S"]
+ignore = ["D203", "D213", "S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "S"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ste-retention"
+version = "2.0.0"
+description = "Versioned, resumable STE retention experiment"
+requires-python = ">=3.14.7"
+dependencies = ["Flask~=3.1.0", "gunicorn~=23.0.0", "requests~=2.32.0"]
+
+[tool.setuptools.packages.find]
+include = ["ste*"]
+exclude = ["originals*", "tests*"]

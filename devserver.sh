@@ -1,20 +1,9 @@
 #!/bin/sh
+# Reloading local launcher; install requirements-dev.txt separately before use.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
 
-if [ ! -d ".venv" ]; then
-    echo "Virtual environment not found. Creating one..."
-    python3 -m venv .venv
-fi
-
-# Activate the virtual environment
-. .venv/bin/activate
-
-if [ -f "requirements.txt" ]; then
-    echo "Installing dependencies from requirements.txt..."
-    pip install --upgrade pip
-    pip install --no-cache-dir --uploaded-prior-to P7D -r requirements.txt
-else
-    echo "Warning: requirements.txt not found."
-fi
-
-echo "Starting Flask debug server"
-python -u -m flask --app flask-app run --host=0.0.0.0 -p ${PORT:-8080} --debug
+# Standard CPython gthread mirrors the production I/O-concurrency model.
+exec gunicorn --reload --bind "0.0.0.0:${PORT:-8080}" --worker-class gthread \
+  --workers 1 --threads "${THREADS:-4}" --timeout 270 --graceful-timeout 30 flask-app:app
