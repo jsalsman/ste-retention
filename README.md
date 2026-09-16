@@ -1,59 +1,157 @@
 # STE Retention
 
-This repository tests whether naming ASD-STE100 helps a model retain simplified-technical-English constraints. It provides two deliberately separate execution paths:
+This project answers one question. Does a model follow a writing standard better when you give the standard a name?
 
-* The Flask application provides a bounded **preview**: one batch, at most three turns, and four arms (at most 12 generation calls). It is not the study.
-* `python -m ste.research` is the resumable **research worker/Cloud Run Job**. It uses the complete 32-prompt pool, all four factorial arms, and probes at turns 1, 6, and 12 by default. It is never invoked by an HTTP request.
+The project tests ASD-STE100 Simplified Technical English (STE). The project is a research tool. It is not an STE checker. It does not give STE certification.
 
-`index.html` remains a standalone document. Flask transport stays in `flask-app.py`; reusable protocol, orchestration, provider, scoring, statistics, record, leaderboard, and run components live in the installable `ste` package. The files under `originals/` are immutable historical references and are deliberately excluded from packaging and Ruff.
+## The question
 
-## Protocol and research fidelity
+You can ask a model to use a controlled writing style in two ways. You can name the standard. You can also describe selected rules.
 
-`ste/protocol.py` is the authority for protocol version `ste-retention-2.0`, scoring version `mechanical-2.0`, schema version 2, model policy, prompt pool, variants, complete rule text, record fields, preview caps, and default research probes. `rules` and `named_rules` use exactly the same complete rule suffix. Within each session, every arm receives the same deterministic prompt sequence. The sequence depends on the stored run seed and session identity—not merely a repeated batch number.
+The two methods ask for the same type of output. However, they can have different effects.
 
-The 2×2 arms are `bare`, `rules`, `named`, and `named_rules`. Paired contrasts are:
+A name can work as a key. The model can use the key to find information that it learned about the standard. A description has no such key. The model reads the description as a set of direct instructions.
 
-* rule detail = `((rules - bare) + (named_rules - named)) / 2`;
-* naming = `((named - bare) + (named_rules - rules)) / 2`;
-* interaction = `named_rules - named - rules + bare`.
+This project measures the difference between the two methods. It also measures how the difference changes as the conversation becomes longer.
 
-These package organization, full prompt pool, probe depths, complete instructions, optional licensed vocabulary, optional judge, and factorial contrasts are the useful research-fidelity ideas retained from `arch-1`. The stronger `arch-2` validation, checkpoint-before-report ordering, atomic snapshots, explicit resume identity, leases, sanitized terminal events, and HTTP limits remain intact.
+## The design
 
-## Setup and local quality gates
+The experiment crosses two factors. One factor is the name of the standard. The other factor is the list of rules. The two factors make four prompt variants.
 
-Use CPython 3.14.7 or newer. This workload waits on networks and files; no measured result justified compiling a custom free-threaded interpreter. Production uses pinned `python:3.14.7-slim-trixie`, Gunicorn `gthread`, one worker by default, and a non-root user. Multiple workers are safe only when production run ownership is transactional as discussed below.
+| Variant | Names the standard | Gives the rules |
+|---|---:|---:|
+| `bare` | No | No |
+| `named` | Yes | No |
+| `rules` | No | Yes |
+| `named_rules` | Yes | Yes |
+
+This cross is necessary. A comparison of a short named prompt with a long rule prompt cannot separate the two effects. The difference can come from the name. The difference can also come from the rule detail or prompt length.
+
+The experiment gives three results:
+
+* The name effect across both levels of rule detail.
+* The rule effect across both levels of naming.
+* The interaction between the name and the rules.
+
+The code calculates these paired contrasts:
+
+* Rule effect: `((rules - bare) + (named_rules - named)) / 2`
+* Name effect: `((named - bare) + (named_rules - rules)) / 2`
+* Interaction: `named_rules - named - rules + bare`
+
+A negative interaction can show that the name and the rules overlap. The interaction does not, by itself, identify the cause of the overlap.
+
+### Pairs
+
+One session runs all four variants against one model. All four variants get the same questions in the same sequence. This procedure gives paired observations.
+
+The stored seed and the session identity determine the sequence. A session does not repeat a question. Saved replies rebuild the same conversation when a run resumes.
+
+The leaderboard compares results only within the same run, model, session, depth, protocol version, and scoring version. It rejects an incomplete four-variant cell. Thus, results from different questions or incompatible versions do not enter one pair.
+
+### Probes
+
+The full study scores compliance at selected conversation depths. The default depths are turns 1, 6, and 12.
+
+The worker still sends the turns between the probes. These turns build the conversation context. The worker keeps the complete history for each variant. It scores and records only the selected probe turns.
+
+The web preview is different. It scores each requested turn and permits only one to three turns. Use the preview to examine the workflow. Do not combine preview results with research results.
+
+### Study size
+
+The full worker uses this generation-call formula:
+
+```text
+models × sessions × 4 variants × deepest probe
+```
+
+The default web study uses one model, six sessions, four variants, and a deepest probe of turn 12. Thus, it makes 288 generation calls.
+
+An optional judge adds this number of calls:
+
+```text
+models × sessions × 4 variants × number of probe depths
+```
+
+The web form does not use a judge or an approved-word file. The command-line worker can use both options.
+
+### Adaptive control
+
+The first historical program used batches and repeated statistical tests. It could stop when the result was clear or when the budget was exhausted. It could also extend the probes to turns 20 and 32.
+
+The current `ste.research` worker does not implement this adaptive procedure. It runs the models, sessions, and depths that the operator specifies. The `budget_usd` value is stored with the configuration, but it does not stop provider charges.
+
+This difference is deliberate. The current worker does not claim that fixed settings implement the historical Pocock stopping rule.
+
+## Before you start
+
+Use CPython 3.14.7 or a later compatible version. Create a virtual environment and install the development requirements.
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements-dev.txt
-pytest
-ruff check .
-ruff format --check .
-python -m compileall -q flask-app.py ste tests
+```
+
+You need an OpenRouter API key for model calls. The web form sends the key in one request. The command-line worker reads the key from its process environment.
+
+```sh
+export OPENROUTER_API_KEY='sk-or-v1-...'
+```
+
+The application does not save or log the key. The person who supplies the key is responsible for all charges.
+
+## How to get the dictionary
+
+The optional vocabulary score needs a list of approved words. The standard contains the dictionary. This project does not supply the standard or the dictionary.
+
+### Procedure
+
+1. Open the [ASD-STE100 downloads page](https://www.asd-ste100.org/STE_downloads.html).
+2. Follow the ASD instructions to request an official copy.
+3. Read the license terms that come with the copy.
+4. Find Part 2, the dictionary.
+5. Make a text file only if your license terms permit this use.
+6. Put one approved word on each line.
+7. Use lower-case letters.
+8. Do not include entries that the standard does not approve.
+9. Save the file outside the repository.
+10. Pass the path to `python -m ste.research` with `--approved-words`.
+
+Do not commit or publish this word list. The command-line worker reads the file at run time. The worker does not copy the list into a snapshot.
+
+### Two cautions
+
+The standard permits applicable technical names and technical verbs. A plain dictionary list cannot identify these project-specific terms. Thus, the vocabulary score can mark a permitted term as unapproved.
+
+The standard is a specification, not only a word list. The current mechanical score tests a small set of properties. It does not test all rules in ASD-STE100.
+
+## How to run the experiment
+
+### Web application
+
+Start the development server.
+
+```sh
 ./devserver.sh
 ```
 
-Tests mock every provider and judge call. They need no credential, network, paid inference, or
-Docker daemon. The application is run locally only through `devserver.sh`; the Dockerfile belongs
-to Cloud Build rather than the local development workflow. The other commands are local
-pre-commit checks; this repository does not install a
-GitHub Actions deployment workflow. Cloud Build is the deployment build system for this branch.
+Open the root page and enter an OpenRouter key. Select a model and an experiment type.
 
-## Bounded web preview
+* **Short preview:** This mode uses all four variants. It makes a maximum of 12 generation calls.
+* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 generation calls.
 
-`POST /api/experiments/stream` accepts JSON objects only and validates model, integers, strings, request size, and a maximum of 12 units before streaming. Provider calls have a nine-second timeout; the orchestrator has a 240-second interactive deadline; Gunicorn uses 270 seconds plus a 30-second graceful timeout; a Cloud Run request timeout should be at least 300 seconds. **NDJSON streaming does not extend the Cloud Run request deadline.**
+The server sends newline-delimited JSON (NDJSON). Each line is one valid JSON object. The server saves each paid response before it reports completion.
 
-The server sends an initial status promptly, checkpoints every paid response before announcing it, and emits one independently valid JSON object per line. Every writable stream ends in exactly one sanitized `success` or `error`. `Cache-Control: no-store`, `X-Accel-Buffering: no`, `nosniff`, CSP, referrer, and permissions headers are applied. The browser handles arbitrary chunks and a final unterminated line, inserts remote content only with `textContent`, uses the loading GIF in an accessible overlay, and restores controls after every outcome. It intentionally has no percentages or progress bar.
+A browser, proxy, or server timeout can stop a full study. Streaming does not extend the Cloud Run request limit. Copy the run ID. Select the same mode and settings, enter the run ID, and supply a new API key to resume.
 
-A resume requires an explicit run ID and identical settings. The stored random seed recreates prompts. Saved responses rebuild conversation context, completed units are skipped, and duplicate, excess, malformed, conflicting, and out-of-range records fail closed. `GET /api/experiments/<id>/status` returns safe liveness metadata. `DELETE /api/experiments/<id>` deletes an owner's operational snapshot.
+The web application has no authentication or authorization layer. A person who knows a run ID can inspect status, resume the run, or delete the snapshot. Use a suitable deployment boundary if model text is sensitive.
 
-## Full research worker
+### Command-line worker
 
-Example dry configuration and confirmed invocation:
+This command runs two models and uses the optional word list and judge:
 
 ```sh
-export OPENROUTER_API_KEY='...'
 python -m ste.research \
   --models google/gemini-2.0-flash-001 openai/gpt-4o \
   --sessions 6 --depths 1 6 12 --seed 20260916 \
@@ -63,66 +161,140 @@ python -m ste.research \
   --state /durable/research/RUN.json --yes
 ```
 
-The worker displays generation calls, separate judge calls, and the operator's budget cap before paid work; `--yes` is mandatory. Pricing is intentionally not hard-coded because provider prices change: configure provider-side spending limits at or below the confirmed cap. Sessions, models, depths, seed, timeouts, judge, and budget are persisted and validated on resume. Use `--run-id ID` with the same state path and configuration; the worker never chooses a stale run implicitly. Every generation and judge unit has an idempotency identity and is atomically persisted before it is reported. Partial arms resume at the next missing turn with reconstructed history.
+The command shows 576 generation calls and 144 judge calls for this example. The `--yes` option confirms the displayed workload. It does not confirm a price estimate.
 
-An approved-word file is optional and supplied only at runtime; licensed data is ignored by Git and is never committed. Judge output must be a JSON object with one finite `score` from 0 through 100. Credentials are passed explicitly and are absent from snapshots, records, errors, output, and logs.
+To resume, use the same state path and all the same configuration values. Add `--run-id` with the saved run ID. The worker rejects a changed configuration before it makes a new paid call.
 
-## Scoring limitations
+## Cost
 
-Mechanical scoring reports sentence count/length, compliance with the 25-word descriptive ceiling, a regex-based active/passive estimate, and vocabulary compliance when a list exists. It retains the original over-20-word diagnostic. Optional components are `null`, not success or failure, when unavailable. The composite is the equal-weight arithmetic mean of available component percentages (sentence length, active voice, optional vocabulary, optional judge), bounded from 0 through 100. Regex sentence boundaries and passive detection have false positives and negatives; technical names may be valid despite absence from a word list. This is transparent approximation, **not ASD-STE100 certification**.
+The current code does not contain a pricing table. It does not calculate a currency estimate because provider prices and model identifiers can change.
 
-## Schema and migration
+The old program estimated 5.92 USD for one default batch. It estimated 12 to 18 USD for a typical adaptive run. These historical values do not describe the current fixed-session worker. Do not use them as a current quote.
 
-Every schema-2 run and analytical record carries `schema_version`, `protocol_version`, `scoring_version`, `run_mode`, stable run/session identities, model, arm, depth, prompt/sequence identities, score, component metrics, and useful timestamps. Operational snapshots additionally contain prompts/responses needed for resume. Current readers reject incompatible version triples rather than pooling them. Leaderboards separate version strata and, by default, exclude previews, synthetic data, incomplete cells, and retries that are not complete.
+Before a run, calculate the call count from the formulas in the design section. Check the current prices for each selected model in OpenRouter. Include the growing conversation history, output-token limit, and optional judge calls in your estimate.
 
-The only automatic migration is the documented original JSONL shape containing `session`, `model`, `variant`, `depth`, and `score`. It is labeled `schema_version: 1`, `protocol_version: legacy-original`, and `scoring_version: legacy-original`; fields are not reinterpreted. Other historical shapes require an explicit offline adapter and produce a line-numbered error.
+The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
-## Authentication, authorization, and production coordination
+The web form shows the default generation-call count before a full run. It does not show a currency estimate. The user who enters the OpenRouter key accepts the provider charges.
 
-Local mode defaults to user `local`. **Do not expose it publicly.** Public deployment must set `AUTH_REQUIRED=true` and configure `AUTH_TOKENS_JSON` through Secret Manager (never a checked-in environment file), or replace `ste.auth` with verified Cloud Run IAM identity. All start, resume, view, and delete operations are owner-scoped; run IDs are identifiers, never authorization secrets. The included process-local burst limit is defense in depth, not a global limit.
+## The files
 
-Before public paid inference, enforce at an authenticated gateway/transactional database:
+### `ste/research.py`
 
-* per-user and global request and spending limits, maximum concurrent runs, abuse detection, and safe content-free audit metadata;
-* Cloud Run IAM with `--no-allow-unauthenticated` and, when needed, Cloud Armor; TLS is mandatory;
-* CSRF tokens if authentication ever moves to cookies (the supplied bearer design does not use cookies);
-* a transactional ownership row claimed with a conditional update, for example `UPDATE runs SET owner_worker=:worker, lease_until=:expiry WHERE run_id=:id AND (owner_worker IS NULL OR lease_until < CURRENT_TIMESTAMP)`, followed by checking exactly one affected row;
-* a unique database constraint on `(run_id, unit_id)` so repeated checkpoints are idempotent and duplicate paid calls cannot become duplicate observations.
+This module runs the full experiment. It also supplies the `python -m ste.research` command.
 
-Local `flock`, heartbeat, timestamp fallback, atomic replacement, and process locks are useful development behavior. Timestamp fallback plus a process-local lock is **not exactly-once cross-instance coordination**. Do not run multiple production instances/workers for paid work until the transactional owner adapter above is installed. A managed task queue with run/unit idempotency keys is an equivalent production option.
+**Configuration.** Command options set the models, sessions, probe depths, seed, timeouts, budget value, optional word list, optional judge, state path, and resume ID.
 
-## Retention, deletion, and recovery
+**Workload confirmation.** The module calculates generation and judge call counts. It prints the counts and the configured budget value. It requires `--yes` before paid work starts.
 
-`EXPERIMENT_RETENTION_DAYS` should be enforced by a scheduled authenticated cleanup job (recommended default 30 days): delete expired completed, interrupted, and abandoned operational snapshots plus leases. The API deletion route removes only the caller's operational preview state. Research snapshots and de-identified analytical records are separate assets; deleting operational state must not silently delete authorized research data. Establish the study's analytical retention/consent period explicitly before collection (the repository sets none).
+**One session.** The module sends one system instruction for each variant. It keeps all user and assistant messages in that variant's history. It sends the same prompt sequence to all four variants.
 
-Snapshots contain prompts and model responses. Limit access to the owner and authorized operators, encrypt storage and backups, and disclose this storage before collection. Back up authorized analytical records with tested restore procedures; resumable operational state can use short-lived encrypted backups. Logs must contain only user/run/unit identifiers, status, timing, and sanitized provider categories—never credentials, authorization headers, prompts, responses, provider bodies, or licensed words.
+**Checkpoints.** The module saves each generation call and each judge call before it reports the unit. It uses stable unit identities. A resumed run skips saved units and reconstructs the missing conversation history.
 
-## Deployment
+**Records.** The module creates one analytical record at each probe depth. Records contain schema, protocol, and scoring versions. They also contain stable run, session, prompt, model, variant, and depth values.
 
-The Dockerfile is the build contract for a Cloud Build-backed Cloud Run deployment. Configure the
-Cloud Build trigger and the target Cloud Run service before expecting a remote container build to
-run. The service configuration must include, at minimum:
+### `ste/experiment.py`
 
-* the region, runtime service account, ingress and IAM policy;
-* memory, CPU, concurrency, minimum/maximum instances, and the 300-second request timeout;
-* the writable GCS bucket volume and its `/experiments` FUSE mount;
-* the default `/experiments` storage path and Cloud Run IAM authentication policy;
-* health/startup probes for `/api/healthz`; and
-* transactional ownership/global limit infrastructure before enabling paid multi-instance work.
+This module runs the short web preview. It limits synchronous work to one batch, three turns, and 12 units. It stops before the deployment request limit and uses short provider timeouts.
 
-Do not use `--allow-unauthenticated` for a service that can initiate paid calls. Use a separate
-Cloud Run Job for `python -m ste.research`. No service-level OpenRouter key, related environment
-variable, or Secret Manager entry is required: the user supplies that credential in each request,
-and the service does not persist it. The container preserves signal forwarding through `exec`;
-`/api/healthz` and `/` are its build-time smoke-test targets. Those image checks do not prove that
-the Cloud Build trigger, service memory, IAM, or GCS FUSE mount are configured correctly.
+Preview records have `run_mode` set to `preview`. The normal leaderboard does not combine them with research data.
 
-## Deliberate scope choices
+### `ste/scoring.py`
 
-* No licensed approved-word data, credentials, run data, or responses are committed.
-* The web limit remains one batch rather than two because no benchmark justifies raising it.
-* Adaptive sequential stopping from the historical script is documented research context but is not silently automated: operators configure session/depth and budget caps, while provider-side budget enforcement is authoritative.
-* A custom free-threaded CPython build was removed because the service is I/O-bound and no measured benefit justified its build time, image size, or supply-chain surface.
-* Cross-instance exactly-once ownership, distributed global spending/rate enforcement, backup service, and scheduled retention execution are deployment infrastructure contracts, not falsely simulated with filesystem timestamps.
+This module calculates sentence-length and approximate active-voice components. It can add vocabulary and judge components when the caller supplies them.
 
-ASD-STE100 is ASD's copyrighted standard and trademark. Obtain an official copy under its terms; this project does not redistribute its dictionary.
+The composite score is the arithmetic mean of available component percentages. A missing optional component has a null value. It is not a pass or a failure.
+
+The sentence-length component uses a 25-word ceiling. The output also includes the historical diagnostic for sentences of more than 20 words.
+
+### `ste/statistics.py`
+
+This module supplies a dependency-free paired t-test. It calculates the t value, degrees of freedom, two-sided p value, mean effect, effect size, and confidence-interval half-width.
+
+The current research runner does not use this test for adaptive stopping. The module remains available for analysis.
+
+### `ste/leaderboard.py`
+
+This module renders complete research snapshots. It calculates the rule, name, and interaction contrasts for each complete paired cell.
+
+The current page is a table. It shows the model, protocol version, scoring version, bare baseline, three mean contrasts, and paired-observation count. It does not make the historical SVG confidence-interval chart.
+
+The Flask route reads complete research snapshots from `EXPERIMENTS_DIR`. It can also read the original JSONL format as a migration path.
+
+### Web and support files
+
+* `flask-app.py` supplies HTTP routes, status checks, leases, and NDJSON streams.
+* `index.html` is the stand-alone application document.
+* `static/app.js` supplies browser behavior.
+* `static/styles.css` supplies presentation.
+* `ste/protocol.py` supplies prompts, variants, limits, and version values.
+* `ste/runs/` supplies snapshots and leases.
+* `ste/records.py` validates record input and the legacy format.
+* `originals/` contains historical reference programs. The package build and Ruff exclude these files.
+
+## Scoring limits
+
+The score is not a full test of ASD-STE100. Without an approved-word list, the mechanical score measures sentence length and approximate active voice. The optional judge adds a model opinion. The judge is not a certified checker.
+
+Sentence splitting and passive-voice detection use regular expressions. They can give false positive and false negative results. Technical terms can cause false vocabulary failures.
+
+The result applies to the tested model version on the test date. Models can change. The result does not automatically apply to a different model or writing standard.
+
+Per-model results have fewer observations than combined results. Do not use a small per-model result as a general model rank.
+
+## The standard
+
+ASD owns ASD-STE100 and its dictionary. Get an official copy from the [ASD-STE100 downloads page](https://www.asd-ste100.org/STE_downloads.html).
+
+Do not reprint or change the standard. Do not use ASD marks in a way that implies approval. This project does not imply that ASD approves or certifies the software.
+
+The STEMG has published work about ASD-STE100 and artificial intelligence. See the [ASD-STE100 and AI white paper](https://www.asd-ste100.org/assets/files/WhitePaper-ASD-STE100_and_AI.pdf).
+
+If you publish experiment results, give the protocol and model date. Publish model replies when your data policy permits this. Do not publish the approved-word file.
+
+## Checkpoints, storage, and recovery
+
+The application stores snapshots in `EXPERIMENTS_DIR`. The default path is `/experiments`. A research snapshot contains prompts and model replies that are necessary for resume. It never contains the API key.
+
+A file lease prevents two local workers from using one run at the same time. A heartbeat shows if a run is active or stalled. This lease does not guarantee exclusive work across multiple Cloud Run instances.
+
+Use one application instance unless the deployment has a transactional run owner. A unique `(run_id, unit_id)` database constraint can prevent duplicate units across workers.
+
+The leaderboard reads only complete research snapshots. It excludes preview and incomplete research runs. It separates records with different protocol and scoring versions.
+
+## Browser behavior and accessibility
+
+During a request, the page shows `static/loading.gif` in an accessible overlay. The page gives text status. It shows an approximate ETA only after sufficient measured work.
+
+The page has no percentage display or progress bar. It restores controls after success, failure, cancellation, disconnection, or an early stream closure.
+
+The browser inserts external values with `textContent`. The leaderboard escapes external labels and validates numeric values. The interface supports keyboard use, live status, contrast, and reduced-motion preferences.
+
+## Development checks
+
+Run these checks before you commit a change:
+
+```sh
+pytest
+ruff check .
+ruff format --check .
+python -m compileall -q flask-app.py ste tests
+```
+
+Tests replace paid and external calls with test functions. Tests do not need a provider key, network access, or a Docker daemon.
+
+Runtime packages are in `requirements.txt`. Development and test packages are in `requirements-dev.txt`.
+
+## Deployment and data care
+
+The Dockerfile is the Cloud Build contract. The container runs Gunicorn as a non-root user. Mount durable storage at `/experiments`, or set `EXPERIMENTS_DIR` to a durable path.
+
+Snapshots contain user prompts and model replies. Encrypt storage and backups. Limit operator access. Set and disclose a retention period. Delete expired snapshots and lease files with a scheduled job.
+
+Do not put keys, request headers, prompts, replies, provider bodies, or licensed words in logs. Logs can contain safe run identifiers, unit identifiers, status values, and timing values.
+
+A full web study can exceed the deployment request limit. Resume after a timeout. For unattended work, run `python -m ste.research` in a Cloud Run Job.
+
+## License
+
+See `LICENSE` for the software license. ASD-STE100 remains the property of ASD. This project gives no ASD approval or certification.

@@ -11,8 +11,9 @@
 - Restore controls and hide the overlay after success, failure, cancellation, disconnection, or premature closure.
 - Do not introduce percentage displays, completion bars, or progress elements.
 - Pass credentials explicitly, redact them from every output, and never persist or log them.
-- Bound synchronous web work below the deployment request timeout with a safety margin.
-- Direct full experiments to an asynchronous worker such as a Cloud Run Job.
+- Do not add application authentication or authorization. Run IDs are unguessable resume handles, not access-control identities.
+- Bound preview web work below the deployment request timeout with a safety margin.
+- The web form can stream the full `ste.research` study. Keep it resumable because request timeouts can interrupt it. Recommend a Cloud Run Job for unattended studies.
 - Escape external leaderboard values and validate every numeric chart or SVG input.
 - Preserve keyboard operation, semantic labels, live status, contrast, and reduced-motion support.
 - Mock all paid and external calls in tests, which belong under `tests/`.
@@ -20,3 +21,4 @@
 - Keep runtime requirements separate from development and test requirements.
 - Do not add tests that build or run the Docker container.
 - Keep `README.md` and `AGENTS.md` up to date with important learnings and changes.
+- In README research history, clearly separate historical adaptive controls and cost estimates from current implemented behavior.

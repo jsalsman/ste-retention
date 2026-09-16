@@ -50,7 +50,6 @@ def create_run(
     batches: int,
     turns: int,
     *,
-    owner_id: str = "local",
     seed: int | None = None,
 ) -> dict:
     """Create and durably save metadata for a new bounded experiment run."""
@@ -62,7 +61,6 @@ def create_run(
         "protocol_version": PROTOCOL_VERSION,
         "scoring_version": SCORING_VERSION,
         "run_mode": "preview",
-        "owner_id": owner_id,
         "seed": seed if seed is not None else int.from_bytes(os.urandom(8), "big"),
         "run_id": run_id,
         "model": model,
@@ -91,7 +89,6 @@ def load_run(directory: Path, run_id: str) -> dict:
         "protocol_version",
         "scoring_version",
         "run_mode",
-        "owner_id",
         "seed",
         "run_id",
         "model",
@@ -112,7 +109,6 @@ def load_run(directory: Path, run_id: str) -> dict:
         or state["protocol_version"] != PROTOCOL_VERSION
         or state["scoring_version"] != SCORING_VERSION
         or state["run_mode"] != "preview"
-        or not isinstance(state["owner_id"], str)
         or type(state["seed"]) is not int
         or not isinstance(state["records"], list)
     ):
