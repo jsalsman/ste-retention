@@ -143,6 +143,8 @@ the provider's finish reason. A token-limit finish returns the available text as
 plain text and labels it incomplete, so the browser warns that the displayed text
 may be truncated. Malformed provider metadata and provider failures produce a
 sanitized error without returning credentials or the provider response body.
+Preview and research runners likewise unwrap validated completions to plain text;
+they checkpoint safe partial text when a token limit ends a generation.
 
 The model menu currently offers Gemini 3.8 Flash, GPT-6 Sol, Claude Sonnet 5, and
 Llama 4 Maverick. These exact OpenRouter model identifiers were verified against

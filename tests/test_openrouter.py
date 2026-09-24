@@ -12,6 +12,7 @@ def _response(payload):
     """Build a successful mocked HTTP response containing the supplied JSON payload."""
     # The response passes HTTP validation before returning controlled provider JSON.
     response = Mock()
+    # Both response operations behave like a successful requests response.
     response.raise_for_status.return_value = None
     response.json.return_value = payload
     return response
@@ -27,6 +28,7 @@ def test_chat_returns_validated_completion_metadata(monkeypatch):
 
     completion = openrouter.chat("secret", "model", [{"role": "user", "content": "Hi"}])
 
+    # The adapter exposes only the validated text and normalized provider status.
     assert completion == openrouter.ChatCompletion(
         content="Complete", finish_reason="stop", complete=True
     )
@@ -41,8 +43,10 @@ def test_chat_raises_distinct_error_with_partial_text_at_token_limit(monkeypatch
     monkeypatch.setattr(openrouter.requests, "post", Mock(return_value=response))
 
     with pytest.raises(openrouter.IncompleteGenerationError) as caught:
+        # Explicit truncation is distinct from malformed or failed provider responses.
         openrouter.chat("secret", "model", [{"role": "user", "content": "Hi"}])
 
+    # Safe partial text survives without retaining the credential-bearing response.
     assert caught.value.content == "Partial"
     assert "secret" not in str(caught.value)
 
@@ -57,8 +61,10 @@ def test_chat_rejects_malformed_choice_metadata(monkeypatch, finish_reason):
     monkeypatch.setattr(openrouter.requests, "post", Mock(return_value=response))
 
     with pytest.raises(openrouter.UpstreamError) as caught:
+        # Every unsupported metadata shape follows the same sanitized failure path.
         openrouter.chat("secret", "model", [{"role": "user", "content": "Hi"}])
 
+    # Neither provider details nor caller credentials appear in the public exception.
     assert str(caught.value) == "OpenRouter could not complete the request."
     assert "secret" not in str(caught.value)
 
@@ -70,7 +76,28 @@ def test_chat_sanitizes_provider_failure(monkeypatch):
     monkeypatch.setattr(openrouter.requests, "post", Mock(side_effect=failure))
 
     with pytest.raises(openrouter.UpstreamError) as caught:
+        # The adapter translates requests exceptions without exposing their messages.
         openrouter.chat("secret", "model", [{"role": "user", "content": "Hi"}])
 
+    # Public error text is stable and contains no unsafe transport detail.
     assert str(caught.value) == "OpenRouter could not complete the request."
     assert "secret" not in str(caught.value) and "provider-body" not in str(caught.value)
+
+
+def test_chat_text_unwraps_complete_and_incomplete_generations(monkeypatch):
+    """Give experiment runners plain text for complete and token-limited responses."""
+    # A normal completion is reduced to the string expected by scoring and persistence.
+    monkeypatch.setattr(
+        openrouter,
+        "chat",
+        Mock(return_value=openrouter.ChatCompletion("Complete", "stop", True)),
+    )
+    assert openrouter.chat_text("secret", "model", []) == "Complete"
+
+    # Explicitly truncated text remains useful, safe measured work for resumable studies.
+    monkeypatch.setattr(
+        openrouter,
+        "chat",
+        Mock(side_effect=openrouter.IncompleteGenerationError("Partial", "length")),
+    )
+    assert openrouter.chat_text("secret", "model", []) == "Partial"

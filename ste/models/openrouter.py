@@ -84,3 +84,18 @@ def chat(
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
         # Deliberately discard response bodies, headers, and exception strings.
         raise UpstreamError("OpenRouter could not complete the request.") from exc
+
+
+def chat_text(
+    api_key: str,
+    model: str,
+    messages: list[dict[str, str]],
+    **options: Any,
+) -> str:
+    """Return validated model text for experiment runners, including safe partial text."""
+    try:
+        # Experiment checkpoints retain text only, while interactive calls use full metadata.
+        return chat(api_key, model, messages, **options).content
+    except IncompleteGenerationError as exc:
+        # A token-limited answer remains useful measured work and is safe to checkpoint.
+        return exc.content

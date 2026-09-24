@@ -11,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
-from ste.models.openrouter import chat
+from ste.models.openrouter import chat_text
 from ste.protocol import (
     ALLOWED_MODELS,
     DEFAULT_RESEARCH_DEPTHS,
@@ -177,7 +177,7 @@ def run_research(
     state: dict,
     persist: Callable[[dict], None],
     *,
-    request: Callable[..., str] = chat,
+    request: Callable[..., str] = chat_text,
     approved_words: set[str] | frozenset[str] | None = None,
 ) -> Iterator[dict]:
     """Run or resume every arm, persisting each inference before reporting it."""
