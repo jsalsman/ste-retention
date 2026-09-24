@@ -34,10 +34,10 @@ class ChatCompletion:
 
 
 class IncompleteGenerationError(UpstreamError):
-    """Report explicit provider truncation while retaining safe partial model text."""
+    """Retain safe partial model text when bounded continuation cannot finish."""
 
     def __init__(self, content: str, finish_reason: str = "length") -> None:
-        """Create a sanitized truncation result containing only model-generated text."""
+        """Create a sanitized incomplete result containing only validated model text."""
         # Do not retain the response, its headers, or any credential-bearing exception.
         super().__init__("OpenRouter reported that the response was truncated.")
         # Both fields have passed validation and are safe for the public response.
@@ -162,12 +162,17 @@ def chat_text(
 
     Returns:
         The validated completion text without status metadata. If bounded continuation
-        is exhausted or its shared deadline expires, returns the validated partial text
-        carried by :class:`IncompleteGenerationError` rather than raising that error.
+        is exhausted, its shared deadline expires, or a continuation fails during
+        transport, HTTP handling, or response parsing, returns the validated partial
+        text carried by :class:`IncompleteGenerationError` rather than raising that
+        error. Experiment runners therefore persist that partial text as the completed
+        result for the logical generation.
 
     Raises:
-        UpstreamError: If credentials are absent, transport or HTTP handling fails, or
-            the provider response is malformed. The message is sanitized.
+        UpstreamError: If credentials are absent, or transport, HTTP handling, or
+            response parsing fails before any model text is validated. Failures after
+            validated partial text instead return that text as described above. The
+            error message is sanitized.
         TypeError: If forwarded options are unsupported or otherwise invalid before the
             sanitized provider-response handling in :func:`chat` applies.
 

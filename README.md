@@ -146,7 +146,11 @@ sanitized error without returning credentials or the provider response body.
 Preview and research runners likewise unwrap validated completions to plain text;
 the client makes up to two follow-up calls with the partial assistant response when
 a token limit is reached. If those bounded continuations are also truncated, the
-runners checkpoint the combined safe partial text.
+runners checkpoint the combined safe partial text. If a continuation instead fails
+during transport, HTTP handling, or response parsing, the runners also checkpoint the
+text that was validated before the failure as the completed result for that logical
+generation. The sanitized provider error is returned only when no model text was
+validated.
 
 The model menu currently offers Gemini 3.8 Flash, GPT-6 Sol, Claude Sonnet 5, and
 Llama 4 Maverick. These exact OpenRouter model identifiers were verified against
