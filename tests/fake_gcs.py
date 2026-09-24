@@ -89,6 +89,7 @@ class FakeBucket:
         # Generation zero means absent, matching ``if_generation_match=0`` semantics.
         self.next_generation = 0
         self.ambiguous_uploads = 0
+        self.vanish_on_get = 0
 
     def blob(self, name):
         """Return a mutable blob handle for an object name."""
@@ -98,6 +99,11 @@ class FakeBucket:
     def get_blob(self, name):
         """Return current object metadata or None without exposing mutable storage."""
         with self.lock:
+            if self.vanish_on_get and name in self.objects:
+                # Model a release between a failed create and its fresh metadata read.
+                self.vanish_on_get -= 1
+                del self.objects[name]
+                return None
             current = self.objects.get(name)
             if current is None:
                 return None

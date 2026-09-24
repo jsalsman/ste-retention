@@ -125,6 +125,25 @@ def _read_gcs_lease(bucket: Any, object_name: str) -> tuple[dict, int]:
     return _parse_metadata(contents), generation
 
 
+def _adopt_ambiguous_acquire(bucket: Any, object_name: str, owner_id: str) -> int:
+    """Adopt an acquire upload that succeeded before its response was lost.
+
+    A client retry can surface ``PreconditionFailed`` after the original conditional
+    upload committed. Only the freshly read owner identifier can distinguish that
+    result from contention, and its generation becomes the caller's fencing token.
+    """
+    try:
+        # Read through the API so a mounted metadata cache cannot hide the committed owner.
+        metadata, generation = _read_gcs_lease(bucket, object_name)
+    except Exception as exc:
+        # Without current ownership proof, the request must not proceed with paid work.
+        raise RunActiveError(ACTIVE_MESSAGE) from exc
+    if metadata.get("owner_id") != owner_id:
+        # A different owner won the retry race and retains the active lease.
+        raise RunActiveError(ACTIVE_MESSAGE)
+    return generation
+
+
 def _acquire_gcs(run_id: str, backend: StorageBackend, owner_id: str, duration: float) -> RunLease:
     """Create or conditionally take over a Cloud Storage lease object."""
     object_name = backend.object_name(f"leases/{run_id}.lock")
@@ -152,10 +171,12 @@ def _acquire_gcs(run_id: str, backend: StorageBackend, owner_id: str, duration: 
                     generation = int(blob.generation)
                 except Exception as retry_error:
                     if is_precondition_failed(retry_error):
-                        raise RunActiveError(ACTIVE_MESSAGE) from retry_error
-                    raise LeaseUnavailableError(
-                        "Cloud Storage lease acquisition failed."
-                    ) from retry_error
+                        # The retried create may have committed before its response was lost.
+                        generation = _adopt_ambiguous_acquire(backend.bucket, object_name, owner_id)
+                    else:
+                        raise LeaseUnavailableError(
+                            "Cloud Storage lease acquisition failed."
+                        ) from retry_error
             else:
                 raise LeaseUnavailableError("Cloud Storage lease read failed.") from read_error
         else:
@@ -176,10 +197,12 @@ def _acquire_gcs(run_id: str, backend: StorageBackend, owner_id: str, duration: 
                     generation = int(blob.generation)
                 except Exception as takeover_error:
                     if is_precondition_failed(takeover_error):
-                        raise RunActiveError(ACTIVE_MESSAGE) from takeover_error
-                    raise LeaseUnavailableError(
-                        "Cloud Storage lease takeover failed."
-                    ) from takeover_error
+                        # A committed takeover owns a newer generation despite this response.
+                        generation = _adopt_ambiguous_acquire(backend.bucket, object_name, owner_id)
+                    else:
+                        raise LeaseUnavailableError(
+                            "Cloud Storage lease takeover failed."
+                        ) from takeover_error
     return RunLease(
         run_id,
         owner_id,

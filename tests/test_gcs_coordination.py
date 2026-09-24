@@ -61,6 +61,46 @@ def test_gcs_expired_and_malformed_leases_are_taken_over(tmp_path, monkeypatch):
     lease.release()
 
 
+def test_gcs_ambiguous_takeover_adopts_committed_generation(tmp_path, monkeypatch):
+    """Adopt ownership when an expired takeover commits before its response is lost."""
+    bucket = FakeBucket()
+    backend = _backend(tmp_path, bucket)
+    monkeypatch.setattr(lease_module, "get_backend", lambda _directory: backend)
+    name = f"leases/{'f' * 32}.lock"
+    expired = {
+        "owner_id": "expired-owner",
+        "heartbeat_at": datetime.now(timezone.utc).isoformat(),
+        "lease_expires_at": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+    }
+    bucket.blob(name).upload_from_string(
+        json.dumps(expired), content_type="application/json", if_generation_match=0
+    )
+    # The takeover commits, while the fake response reports a failed old precondition.
+    bucket.ambiguous_uploads = 1
+    lease = acquire_lease("f" * 32, tmp_path)
+    # The adopted generation lets this request release its committed lease immediately.
+    assert lease.generation == bucket.objects[name].generation
+    lease.release()
+
+
+def test_gcs_ambiguous_retry_create_adopts_committed_generation(tmp_path, monkeypatch):
+    """Adopt a retried create after the previous lease disappears during its read."""
+    bucket = FakeBucket()
+    backend = _backend(tmp_path, bucket)
+    monkeypatch.setattr(lease_module, "get_backend", lambda _directory: backend)
+    name = f"leases/{'9' * 32}.lock"
+    bucket.blob(name).upload_from_string(
+        b"{}", content_type="application/json", if_generation_match=0
+    )
+    # Simulate release before the read, then a successful retry with a lost response.
+    bucket.vanish_on_get = 1
+    bucket.ambiguous_uploads = 1
+    lease = acquire_lease("9" * 32, tmp_path)
+    # Adoption prevents the successful retry from becoming an unreachable live lease.
+    assert lease.generation == bucket.objects[name].generation
+    lease.release()
+
+
 def test_gcs_ambiguous_heartbeat_is_adopted_and_stolen_owner_is_rejected(tmp_path, monkeypatch):
     """Adopt an ambiguous own write but stop after another owner replaces the lease."""
     bucket = FakeBucket()
