@@ -59,13 +59,13 @@ The web preview is different. It scores each requested turn and permits only one
 
 ### Study size
 
-The full worker uses this generation-call formula:
+The full worker uses this logical generation-unit formula:
 
 ```text
 models × sessions × 4 variants × deepest probe
 ```
 
-The default web study uses one model, six sessions, four variants, and a deepest probe of turn 12. Thus, it makes 288 generation calls.
+The default web study uses one model, six sessions, four variants, and a deepest probe of turn 12. Thus, it makes 288 logical generation units. Each unit normally makes one provider call, but a token-limited response can make up to two continuation calls.
 
 An optional judge adds this number of calls:
 
@@ -143,6 +143,10 @@ the provider's finish reason. A token-limit finish returns the available text as
 plain text and labels it incomplete, so the browser warns that the displayed text
 may be truncated. Malformed provider metadata and provider failures produce a
 sanitized error without returning credentials or the provider response body.
+Preview and research runners likewise unwrap validated completions to plain text;
+the client makes up to two follow-up calls with the partial assistant response when
+a token limit is reached. If those bounded continuations are also truncated, the
+runners checkpoint the combined safe partial text.
 
 The model menu currently offers Gemini 3.8 Flash, GPT-6 Sol, Claude Sonnet 5, and
 Llama 4 Maverick. These exact OpenRouter model identifiers were verified against
@@ -150,8 +154,8 @@ the provider catalog on 2026-09-24. Exact identifiers make a study more
 reproducible than moving `latest` aliases, but the catalog can change. Verify
 availability before you start a large study.
 
-* **Short preview:** This mode uses all four variants. It makes a maximum of 12 generation calls.
-* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 generation calls.
+* **Short preview:** This mode uses all four variants. It makes a maximum of 12 logical generation units.
+* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 logical generation units.
 
 The server sends newline-delimited JSON (NDJSON). Each line is one valid JSON object. The server saves each paid response before it reports completion.
 
@@ -173,7 +177,7 @@ python -m ste.research \
   --state /durable/research/RUN.json --yes
 ```
 
-The command shows 576 generation calls and 144 judge calls for this example. The `--yes` option confirms the displayed workload. It does not confirm a price estimate.
+The command shows 576 generation units and 144 judge units for this example. The `--yes` option confirms the displayed workload. It does not confirm a price estimate or token-limit continuation calls.
 
 To resume, use the same state path and all the same configuration values. Add `--run-id` with the saved run ID. The worker rejects a changed configuration before it makes a new paid call.
 
@@ -183,7 +187,7 @@ The current code does not contain a pricing table. It does not calculate a curre
 
 The old program estimated 5.92 USD for one default batch. It estimated 12 to 18 USD for a typical adaptive run. These historical values do not describe the current fixed-session worker. Do not use them as a current quote.
 
-Before a run, calculate the call count from the formulas in the design section. Check the current prices for each selected model in OpenRouter. Include the growing conversation history, output-token limit, and optional judge calls in your estimate.
+Before a run, calculate the base call count from the formulas in the design section. Check the current prices for each selected model in OpenRouter. Include the growing conversation history, output-token limit, optional judge calls, and as many as two paid continuation calls after each token-limited response in your estimate.
 
 The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
