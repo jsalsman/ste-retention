@@ -76,6 +76,49 @@ def test_chat_reports_combined_partial_text_after_continuation_limit(monkeypatch
     assert "secret" not in str(caught.value)
 
 
+def test_chat_reports_expiry_before_first_request_as_upstream_error(monkeypatch):
+    """Reject an expired initial deadline rather than returning an empty partial result."""
+    # A zero timeout deterministically expires before any provider request can begin.
+    post = Mock()
+    monkeypatch.setattr(openrouter.requests, "post", post)
+
+    with pytest.raises(openrouter.UpstreamError) as caught:
+        # No generated chunk exists, so the experiment runner must see a failed unit.
+        openrouter.chat("secret", "model", [], timeout=0)
+
+    # The failure is sanitized, and no paid inference was attempted or checkpointed.
+    assert str(caught.value) == "OpenRouter could not complete the request."
+    post.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "continuation_failure",
+    [
+        requests.Timeout("secret transport detail"),
+        _response({"choices": [{"message": {"content": "bad"}, "finish_reason": None}]}),
+    ],
+)
+def test_chat_preserves_partial_text_when_continuation_fails(monkeypatch, continuation_failure):
+    """Retain validated initial text when a continuation transport or payload fails."""
+    # The initial paid call yields useful text and explicitly requests continuation.
+    partial = _response(
+        {"choices": [{"message": {"content": "Useful partial"}, "finish_reason": "length"}]}
+    )
+    # Either an exception or malformed response exercises the sanitized recovery path.
+    post = Mock(side_effect=(partial, continuation_failure))
+    monkeypatch.setattr(openrouter.requests, "post", post)
+
+    with pytest.raises(openrouter.IncompleteGenerationError) as caught:
+        # Continuation failure must remain distinguishable from a wholly failed inference.
+        openrouter.chat("secret", "model", [{"role": "user", "content": "Hi"}])
+
+    # Only validated content survives; provider details and credentials remain excluded.
+    assert caught.value.content == "Useful partial"
+    assert caught.value.finish_reason == "length"
+    assert caught.value.__cause__ is None
+    assert post.call_count == 2
+
+
 @pytest.mark.parametrize("finish_reason", [None, "", 7, "unexpected"])
 def test_chat_rejects_malformed_choice_metadata(monkeypatch, finish_reason):
     """Convert absent or invalid finish metadata into one sanitized upstream error."""
