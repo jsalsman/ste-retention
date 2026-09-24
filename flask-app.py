@@ -7,13 +7,21 @@ from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, stream_with_context
 
-from ste.experiment import ALLOWED_MODELS, run_experiment, validate_run
+from ste.experiment import ALLOWED_MODELS, UPSTREAM_TIMEOUT_SECONDS, run_experiment, validate_run
 from ste.leaderboard import render_file, render_leaderboard
 from ste.models.openrouter import UpstreamError, chat
 from ste.records import RecordError
-from ste.research import ResearchConfig, load_state, new_state, run_research, save_state
-from ste.runs.lease import RunActiveError, acquire_lease
-from ste.runs.store import RUN_ID, RunStoreError, completed_records, create_run, load_run, save_run
+from ste.research import ResearchConfig, load_state, new_state, parse_state, run_research
+from ste.runs.backend import LeaseUnavailableError, is_not_found
+from ste.runs.lease import RunActiveError, acquire_lease, lease_duration
+from ste.runs.store import (
+    RUN_ID,
+    RunStoreError,
+    SnapshotFencer,
+    completed_records,
+    create_run,
+    load_run,
+)
 
 # All repository assets resolve from this file rather than the process directory.
 ROOT = Path(__file__).resolve().parent
@@ -101,6 +109,7 @@ def interact():
 @app.post("/run-experiment")
 def experiment_stream():
     """Run or resume a preview or complete research study as safe NDJSON."""
+    lease = None
     try:
         data = _payload()
         api_key = _key(data)
@@ -114,23 +123,42 @@ def experiment_stream():
         )
         resume_id = data.get("resume_run_id")
         if resume_id in (None, ""):
-            state = create_run(EXPERIMENTS, model, batches, turns)
+            state = create_run(model, batches, turns)
+            # Acquire before the first conditional create for a new random run ID.
+            lease = acquire_lease(
+                state["run_id"],
+                EXPERIMENTS,
+                duration_seconds=lease_duration(UPSTREAM_TIMEOUT_SECONDS),
+            )
+            snapshots = SnapshotFencer(EXPERIMENTS, state["run_id"], lease.backend)
         elif isinstance(resume_id, str):
-            state = load_run(EXPERIMENTS, resume_id)
+            lease = acquire_lease(
+                resume_id,
+                EXPERIMENTS,
+                duration_seconds=lease_duration(UPSTREAM_TIMEOUT_SECONDS),
+            )
+            snapshots = SnapshotFencer(EXPERIMENTS, resume_id, lease.backend)
+            state = snapshots.load_run()
             # Never resume saved work under changed parameters or a different model.
             if (state["model"], state["batches"], state["turns"]) != (model, batches, turns):
                 raise ValueError("Saved run settings do not match this request.")
         else:
             raise ValueError("The experiment run identifier is invalid.")
-        # The open lease handle remains held for the entire streamed request.
-        lease = acquire_lease(state["run_id"], EXPERIMENTS)
         state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
         state["lease_expires_at"] = lease.expires_at.isoformat()
         state["status"] = "running"
-        save_run(EXPERIMENTS, state)
+        snapshots.write(state)
     except RunActiveError as exc:
+        if lease is not None:
+            lease.release()
         return jsonify(error=str(exc)), 409
+    except LeaseUnavailableError as exc:
+        if lease is not None:
+            lease.release()
+        return jsonify(error=str(exc)), 503
     except (OSError, RunStoreError, ValueError) as exc:
+        if lease is not None:
+            lease.release()
         return jsonify(error=str(exc)), 400
 
     def checkpoint(records: list[dict]) -> None:
@@ -141,7 +169,7 @@ def experiment_stream():
         state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
         state["lease_expires_at"] = expires.isoformat()
         # The API key is held only by the surrounding request and never enters state.
-        save_run(EXPERIMENTS, state)
+        snapshots.write(state)
 
     @stream_with_context
     def generate():
@@ -168,7 +196,7 @@ def experiment_stream():
                     state["status"] = "complete"
                     state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
                     state["lease_expires_at"] = None
-                    save_run(EXPERIMENTS, state)
+                    snapshots.write(state)
                 terminal = event.get("type") in {"success", "error"}
                 completed = int(event.get("completed", completed))
                 elapsed = float(event.get("elapsed_seconds", elapsed))
@@ -182,9 +210,9 @@ def experiment_stream():
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
-                    # Best-effort failure metadata leaves completed checkpoints resumable.
-                    save_run(EXPERIMENTS, state)
-                except (OSError, RunStoreError):
+                    # Preserve completed checkpoints unless ownership fencing rejected us.
+                    snapshots.write(state)
+                except (OSError, RunStoreError, RunActiveError, LeaseUnavailableError):
                     pass
                 # Sanitize all upstream and unexpected exception details.
                 yield (
@@ -206,8 +234,8 @@ def experiment_stream():
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
-                    save_run(EXPERIMENTS, state)
-                except (OSError, RunStoreError):
+                    snapshots.write(state)
+                except (OSError, RunStoreError, RunActiveError, LeaseUnavailableError):
                     # The connection is already closing, so no response channel remains.
                     pass
             lease.release()
@@ -240,30 +268,48 @@ def _research_stream(data: dict, api_key: str) -> Response:
     if resume_id in (None, ""):
         # New state includes its own unguessable identifier and protocol versions.
         state = new_state(config)
+        lease = acquire_lease(
+            state["run_id"],
+            EXPERIMENTS,
+            duration_seconds=lease_duration(config.provider_timeout, config.judge_timeout),
+        )
+        snapshots = SnapshotFencer(EXPERIMENTS, state["run_id"], lease.backend)
     elif isinstance(resume_id, str) and RUN_ID.fullmatch(resume_id):
         # The explicit configuration prevents a run from resuming with new semantics.
-        state = load_state(EXPERIMENTS / f"{resume_id}.json", config, resume_id)
+        lease = acquire_lease(
+            resume_id,
+            EXPERIMENTS,
+            duration_seconds=lease_duration(config.provider_timeout, config.judge_timeout),
+        )
+        snapshots = SnapshotFencer(EXPERIMENTS, resume_id, lease.backend)
+        try:
+            # Release ownership when a missing or invalid resume snapshot is rejected.
+            state = parse_state(snapshots.read_bytes(), config, resume_id)
+        except Exception:
+            lease.release()
+            raise
     else:
         raise ValueError("The experiment run identifier is invalid.")
 
-    # Resolve storage only after validating the identifier embedded in the state.
-    path = EXPERIMENTS / f"{state['run_id']}.json"
-    # Hold one lease from the initial running snapshot through generator cleanup.
-    lease = acquire_lease(state["run_id"], EXPERIMENTS)
     state["status"] = "running"
     state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
     state["lease_expires_at"] = lease.expires_at.isoformat()
     # Persist running metadata before response headers expose the stream to a client.
-    save_state(path, state)
+    try:
+        # Failed initial persistence must not strand the lease until expiry.
+        snapshots.write(state)
+    except Exception:
+        lease.release()
+        raise
 
     def checkpoint(value: dict) -> None:
         """Save one credential-free research checkpoint and renew its lease."""
-        # Renew first so a failed or stolen fallback lease stops further state writes.
+        # Renew first so changed ownership stops every later fenced state write.
         expires = lease.heartbeat()
         value["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
         value["lease_expires_at"] = expires.isoformat()
         # Research state contains model output, but it never contains the API key.
-        save_state(path, value)
+        snapshots.write(value)
 
     @stream_with_context
     def generate():
@@ -300,7 +346,7 @@ def _research_stream(data: dict, api_key: str) -> Response:
                     terminal = True
                     state["lease_expires_at"] = None
                     # Commit the terminal snapshot before reporting success to the browser.
-                    save_state(path, state)
+                    snapshots.write(state)
                     event = {
                         "type": "success",
                         "message": "Full research study complete.",
@@ -334,9 +380,9 @@ def _research_stream(data: dict, api_key: str) -> Response:
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
-                    # Saving error metadata is best effort because storage may have failed.
-                    save_state(path, state)
-                except OSError:
+                    # Preserve completed work unless storage or ownership fencing failed.
+                    snapshots.write(state)
+                except (OSError, RunStoreError, RunActiveError, LeaseUnavailableError):
                     # The sanitized stream event remains useful when persistence is down.
                     pass
                 # Never expose provider exceptions, request data, or credentials.
@@ -362,8 +408,8 @@ def _research_stream(data: dict, api_key: str) -> Response:
                 state["lease_expires_at"] = None
                 try:
                     # Make cancellation resumable before giving another request the lease.
-                    save_state(path, state)
-                except OSError:
+                    snapshots.write(state)
+                except (OSError, RunStoreError, RunActiveError, LeaseUnavailableError):
                     # No response channel remains during close, so cleanup is best effort.
                     pass
             # Release on success, failure, disconnection, cancellation, or early close.
@@ -442,19 +488,24 @@ def delete_experiment(run_id: str):
     try:
         if not RUN_ID.fullmatch(run_id):
             raise RunStoreError("The experiment run identifier is invalid.")
-        # The narrow identifier validation makes the derived path traversal-safe.
-        path = EXPERIMENTS / f"{run_id}.json"
-        if not path.is_file():
-            raise FileNotFoundError(path)
-        # The same lease used by workers prevents a later checkpoint recreating the file.
+        # The same lease used by workers rejects deletion during an active request.
         lease = acquire_lease(run_id, EXPERIMENTS)
-        path.unlink()
+        snapshots = SnapshotFencer(EXPERIMENTS, run_id, lease.backend)
+        # API reads capture the exact generation deleted on Cloud Storage.
+        snapshots.read_bytes()
+        snapshots.delete()
         return Response(status=204)
     except RunActiveError as exc:
         # An active stream retains ownership and its durable resume snapshot.
         return jsonify(error=str(exc)), 409
-    except (OSError, RunStoreError) as exc:
+    except LeaseUnavailableError as exc:
+        return jsonify(error=str(exc)), 503
+    except RunStoreError as exc:
         return jsonify(error=str(exc)), 404
+    except Exception as exc:
+        if is_not_found(exc) or isinstance(exc, FileNotFoundError):
+            return jsonify(error="The requested experiment run was not found."), 404
+        raise
     finally:
         if lease is not None:
             # Release only after unlink completes, including storage-error paths.

@@ -7,11 +7,16 @@ from pathlib import Path
 
 import pytest
 
+import ste.runs.lease as lease_module
+from ste.runs.backend import GCSMount, StorageBackend
+from ste.runs.store import SnapshotFencer
+from tests.fake_gcs import FakeBucket
+
 ROOT = Path(__file__).parents[1]
 
 
 @pytest.fixture()
-def module(tmp_path):
+def module(tmp_path, monkeypatch):
     """Import the required hyphenated Flask entry point without normal module syntax."""
     spec = importlib.util.spec_from_file_location("flask_app", ROOT / "flask-app.py")
     loaded = importlib.util.module_from_spec(spec)
@@ -20,6 +25,16 @@ def module(tmp_path):
     loaded.app.config.update(TESTING=True)
     # Every test gets an isolated stand-in for the production /experiments mount.
     loaded.EXPERIMENTS = tmp_path / "experiments"
+    bucket = FakeBucket(loaded.EXPERIMENTS)
+    backend = StorageBackend(
+        loaded.EXPERIMENTS,
+        GCSMount(loaded.EXPERIMENTS, "test-bucket", ""),
+        bucket,
+    )
+    loaded.TEST_BUCKET = bucket
+    loaded.STORAGE_BACKEND = backend
+    # Web tests exercise API-only coordination without credentials or a real mount.
+    monkeypatch.setattr(lease_module, "get_backend", lambda _directory: backend)
     return loaded
 
 
@@ -27,6 +42,15 @@ def module(tmp_path):
 def client(module):
     """Return an isolated Flask test client."""
     return module.app.test_client()
+
+
+def _write_snapshot(module, state):
+    """Conditionally persist app-test state through the in-memory GCS backend."""
+    fencer = SnapshotFencer(module.EXPERIMENTS, state["run_id"], module.STORAGE_BACKEND)
+    # Existing snapshots must be observed before a generation-conditioned update.
+    if f"{state['run_id']}.json" in module.TEST_BUCKET.objects:
+        fencer.read_bytes()
+    fencer.write(state)
 
 
 def test_public_routes_and_assets(client):
@@ -222,28 +246,29 @@ def test_interrupted_run_is_persisted_and_can_resume(client, module, monkeypatch
 
 def test_run_status_distinguishes_active_stalled_and_complete(client, module):
     """Derive liveness from durable heartbeat expiry without exposing record text."""
-    state = module.create_run(module.EXPERIMENTS, "openai/gpt-4o", 1, 1)
+    state = module.create_run("openai/gpt-4o", 1, 1)
     state["status"] = "running"
     state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
     state["lease_expires_at"] = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
-    module.save_run(module.EXPERIMENTS, state)
+    _write_snapshot(module, state)
     endpoint = f"/api/experiments/{state['run_id']}/status"
     assert client.get(endpoint).json["liveness"] == "active"
 
     # An expired heartbeat means no worker has renewed the run lease in time.
     state["lease_expires_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
-    module.save_run(module.EXPERIMENTS, state)
+    _write_snapshot(module, state)
     assert client.get(endpoint).json["liveness"] == "stalled"
     state["status"] = "complete"
     state["lease_expires_at"] = None
-    module.save_run(module.EXPERIMENTS, state)
+    _write_snapshot(module, state)
     response = client.get(endpoint)
     assert response.json["liveness"] == "complete" and "records" not in response.json
 
 
 def test_delete_rejects_active_run_then_removes_idle_snapshot(client, module):
     """Keep an active worker snapshot, then delete it after its lease is released."""
-    state = module.create_run(module.EXPERIMENTS, "openai/gpt-4o", 1, 1)
+    state = module.create_run("openai/gpt-4o", 1, 1)
+    _write_snapshot(module, state)
     lease = module.acquire_lease(state["run_id"], module.EXPERIMENTS)
     endpoint = f"/api/experiments/{state['run_id']}"
     try:
@@ -257,6 +282,31 @@ def test_delete_rejects_active_run_then_removes_idle_snapshot(client, module):
     # Once idle, deletion owns the same lease for the complete unlink operation.
     assert client.delete(endpoint).status_code == 204
     assert not (module.EXPERIMENTS / f"{state['run_id']}.json").exists()
+
+
+def test_missing_gcsfuse_returns_service_unavailable(client, module, monkeypatch):
+    """Map missing required storage detection to a sanitized HTTP 503 response."""
+    from ste.runs.backend import LeaseUnavailableError
+
+    def unavailable(_directory):
+        """Represent an environment without the mandatory gcsfuse mount."""
+        # The production detector supplies the same safe operational message.
+        raise LeaseUnavailableError(
+            "Experiment storage is not backed by the required Cloud Storage volume."
+        )
+
+    monkeypatch.setattr(lease_module, "get_backend", unavailable)
+    request_data = {
+        "api_key": "sample-secret",
+        "model": "openai/gpt-4o",
+        "batches": 1,
+        "turns": 1,
+    }
+    # Missing storage is unsafe in every environment supported by the web service.
+    response = client.post("/api/experiments/stream", json=request_data)
+    assert response.status_code == 503
+    assert "required Cloud Storage volume" in response.json["error"]
+    assert b"sample-secret" not in response.data
 
 
 @pytest.mark.parametrize(

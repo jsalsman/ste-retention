@@ -22,3 +22,4 @@
 - Do not add tests that build or run the Docker container.
 - Keep `README.md` and `AGENTS.md` up to date with important learnings and changes.
 - In README research history, clearly separate historical adaptive controls and cost estimates from current implemented behavior.
+- Web coordination and fencing writes use the Cloud Storage API with generation preconditions, never the mount. The web service refuses to run leases without its gcsfuse mount; a successful `flock` on FUSE proves nothing across instances.

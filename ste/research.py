@@ -132,11 +132,12 @@ def save_state(path: Path, state: dict) -> None:
     os.replace(temporary, path)
 
 
-def load_state(path: Path, config: ResearchConfig, run_id: str) -> dict:
-    """Load an explicitly named run and validate all resume-critical semantics."""
+def parse_state(contents: str | bytes, config: ResearchConfig, run_id: str) -> dict:
+    """Decode and validate research content from either persistence backend."""
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        # Both web API reads and CLI filesystem reads share every semantic check.
+        state = json.loads(contents)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
         raise ValueError("The research snapshot is unavailable or malformed.") from exc
     expected = new_state(config, run_id)["config"]
     versions = (
@@ -158,6 +159,16 @@ def load_state(path: Path, config: ResearchConfig, run_id: str) -> dict:
     ) != len(units):
         raise ValueError("The research snapshot contains duplicate or malformed units.")
     return state
+
+
+def load_state(path: Path, config: ResearchConfig, run_id: str) -> dict:
+    """Load an explicitly named file and validate all resume-critical semantics."""
+    try:
+        # The CLI stays file-based and intentionally takes no web-service lease.
+        contents = path.read_bytes()
+    except OSError as exc:
+        raise ValueError("The research snapshot is unavailable or malformed.") from exc
+    return parse_state(contents, config, run_id)
 
 
 def run_research(

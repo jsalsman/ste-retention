@@ -223,12 +223,12 @@ The Flask route reads complete research snapshots from `EXPERIMENTS_DIR`. It can
 
 ### Web and support files
 
-* `flask-app.py` supplies HTTP routes, status checks, leases, and NDJSON streams.
+* `flask-app.py` supplies HTTP routes, status checks, fenced leases, and NDJSON streams.
 * `index.html` is the stand-alone application document.
 * `static/app.js` supplies browser behavior.
 * `static/styles.css` supplies presentation.
 * `ste/protocol.py` supplies prompts, variants, limits, and version values.
-* `ste/runs/` supplies snapshots and leases.
+* `ste/runs/` supplies snapshots, backend detection, and conditional object leases.
 * `ste/records.py` validates record input and the legacy format.
 * `originals/` contains historical reference programs. The package build and Ruff exclude these files.
 
@@ -256,9 +256,11 @@ If you publish experiment results, give the protocol and model date. Publish mod
 
 The application stores snapshots in `EXPERIMENTS_DIR`. The default path is `/experiments`. A research snapshot contains prompts and model replies that are necessary for resume. It never contains the API key.
 
-A file lease prevents two local workers from using one run at the same time. A heartbeat shows if a run is active or stalled. This lease does not guarantee exclusive work across multiple Cloud Run instances.
+The service detects the Cloud Storage mount automatically. It coordinates leases and snapshot fencing through conditional object writes. Multiple Cloud Run instances are safe. The web service has no local-filesystem coordination mode.
 
-Use one application instance unless the deployment has a transactional run owner. A unique `(run_id, unit_id)` database constraint can prevent duplicate units across workers.
+The web service reads resumed snapshots through the Cloud Storage API. This avoids stale mount-cache data. Snapshot generation preconditions prevent a request that lost its lease from overwriting newer work.
+
+The `ste.research` CLI with `--state` remains file-based and takes no lease. Do not point it at a run that the web service might run at the same time.
 
 The leaderboard reads only complete research snapshots. It excludes preview and incomplete research runs. It separates records with different protocol and scoring versions.
 
@@ -290,6 +292,8 @@ Runtime packages are in `requirements.txt`. Development and test packages are in
 The Dockerfile is the Cloud Build contract. The container runs Gunicorn as a non-root user. Mount durable storage at `/experiments`, or set `EXPERIMENTS_DIR` to a durable path.
 
 Snapshots contain user prompts and model replies. Encrypt storage and backups. Limit operator access. Set and disclose a retention period. Delete expired snapshots and lease files with a scheduled job.
+
+The web service requires a Cloud Storage volume at `EXPERIMENTS_DIR` in every environment. It refuses lease work without that mount. Application Default Credentials and the service identity's bucket role authorize conditional object operations. No key file is needed.
 
 Do not put keys, request headers, prompts, replies, provider bodies, or licensed words in logs. Logs can contain safe run identifiers, unit identifiers, status values, and timing values.
 
