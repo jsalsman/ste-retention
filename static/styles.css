@@ -3,7 +3,7 @@
 * { box-sizing:border-box; }
 body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.6 system-ui,sans-serif; }
 header { display:flex; justify-content:space-between; gap:1rem; padding:1rem max(1rem,calc((100% - 980px)/2)); background:var(--ink); }
-header a { color:#fff; } .brand { font-weight:700; text-decoration:none; }
+header a { color:#fff; } .brand { font-weight:700; } .brand a { text-decoration:none; }
 main { max-width:980px; margin:auto; padding:3rem 1rem 5rem; }
 h1 { max-width:22ch; font-size:clamp(2rem,5vw,3.7rem); line-height:1.08; } h2 { margin-top:0; }
 .eyebrow { color:var(--accent); font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
