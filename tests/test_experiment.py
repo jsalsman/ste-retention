@@ -7,7 +7,7 @@ def test_resume_skips_saved_unit_and_rebuilds_context():
     """Avoid a repeated paid call while retaining the saved conversation answer."""
     saved = {
         "session": 1,
-        "model": "openai/gpt-4o",
+        "model": "openai/gpt-6-sol",
         "variant": "bare",
         "depth": 1,
         "score": 50,
@@ -25,7 +25,7 @@ def test_resume_skips_saved_unit_and_rebuilds_context():
     events = list(
         run_experiment(
             "sample-secret",
-            "openai/gpt-4o",
+            "openai/gpt-6-sol",
             1,
             2,
             request=request,
@@ -57,7 +57,7 @@ def test_maximum_run_has_a_request_timeout_below_the_overall_deadline():
         # The deterministic reply is scored locally without external services.
         return "Use a short active sentence."
 
-    events = list(run_experiment("secret", "openai/gpt-4o", 1, 3, request=request))
+    events = list(run_experiment("secret", "openai/gpt-6-sol", 1, 3, request=request))
 
     assert events[-1]["type"] == "success"
     assert len(timeouts) == MAX_WORK_UNITS

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import ste.runs.lease as lease_module
+from ste.protocol import ALLOWED_MODELS
 from ste.runs.backend import GCSMount, StorageBackend
 from ste.runs.store import SnapshotFencer
 from tests.fake_gcs import FakeBucket
@@ -68,6 +69,10 @@ def test_static_page_contract():
     """Require accessibility hooks and standalone assets without Jinja or a bar."""
     page = (ROOT / "index.html").read_text()
     assert "Jim Salsman" in page
+    # Every server-approved model must be exposed by the standalone form.
+    assert all(f'value="{model}"' in page for model in ALLOWED_MODELS)
+    # Exactly four options keep the client and the explicit server allow-list aligned.
+    assert page.count("<option value=") == len(ALLOWED_MODELS) + 2
     assert all(
         asset in page for asset in ("static/styles.css", "static/app.js", "static/loading.gif")
     )
@@ -107,7 +112,7 @@ def test_interaction_validation_and_mocked_success(client, module, monkeypatch):
     monkeypatch.setattr(module, "chat", lambda *_args, **_kwargs: "Safe answer")
     response = client.post(
         "/api/interact",
-        json={"api_key": "sample-secret", "model": "openai/gpt-4o", "prompt": "Hello"},
+        json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "prompt": "Hello"},
     )
     assert response.json == {"answer": "Safe answer"}
     assert b"sample-secret" not in response.data and b"Authorization" not in response.data
@@ -143,7 +148,7 @@ def test_stream_framing_status_eta_and_terminal(client, module, monkeypatch):
     monkeypatch.setattr(module, "run_experiment", fake)
     response = client.post(
         "/api/experiments/stream",
-        json={"api_key": "sample-secret", "model": "openai/gpt-4o", "batches": 1, "turns": 1},
+        json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "batches": 1, "turns": 1},
     )
     events = [json.loads(line) for line in response.text.splitlines()]
     assert [event["type"] for event in events] == ["status", "status", "success"]
@@ -170,7 +175,7 @@ def test_full_research_stream_is_checkpointed_and_resumable(client, module, monk
     request_data = {
         "api_key": "sample-secret",
         "run_mode": "research",
-        "model": "openai/gpt-4o",
+        "model": "openai/gpt-6-sol",
         "sessions": 1,
     }
     response = client.post("/api/experiments/stream", json=request_data)
@@ -199,7 +204,7 @@ def test_interrupted_run_is_persisted_and_can_resume(client, module, monkeypatch
     def interrupted(*_args, persist, run_id, **_kwargs):
         record = {
             "session": 1,
-            "model": "openai/gpt-4o",
+            "model": "openai/gpt-6-sol",
             "variant": "bare",
             "depth": 1,
             "score": 50,
@@ -217,7 +222,12 @@ def test_interrupted_run_is_persisted_and_can_resume(client, module, monkeypatch
         raise TimeoutError
 
     monkeypatch.setattr(module, "run_experiment", interrupted)
-    request_data = {"api_key": "sample-secret", "model": "openai/gpt-4o", "batches": 1, "turns": 1}
+    request_data = {
+        "api_key": "sample-secret",
+        "model": "openai/gpt-6-sol",
+        "batches": 1,
+        "turns": 1,
+    }
     first = client.post("/api/experiments/stream", json=request_data)
     first_events = [json.loads(line) for line in first.text.splitlines()]
     run_id = first_events[0]["run_id"]
@@ -274,7 +284,7 @@ def test_lost_lease_cannot_write_interrupted_cleanup_snapshot(client, module, mo
         "/api/experiments/stream",
         json={
             "api_key": "sample-secret",
-            "model": "openai/gpt-4o",
+            "model": "openai/gpt-6-sol",
             "batches": 1,
             "turns": 1,
         },
@@ -294,7 +304,7 @@ def test_lost_lease_cannot_write_interrupted_cleanup_snapshot(client, module, mo
 
 def test_run_status_distinguishes_active_stalled_and_complete(client, module):
     """Derive liveness from durable heartbeat expiry without exposing record text."""
-    state = module.create_run("openai/gpt-4o", 1, 1)
+    state = module.create_run("openai/gpt-6-sol", 1, 1)
     state["status"] = "running"
     state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
     state["lease_expires_at"] = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
@@ -315,7 +325,7 @@ def test_run_status_distinguishes_active_stalled_and_complete(client, module):
 
 def test_delete_rejects_active_run_then_removes_idle_snapshot(client, module):
     """Keep an active worker snapshot, then delete it after its lease is released."""
-    state = module.create_run("openai/gpt-4o", 1, 1)
+    state = module.create_run("openai/gpt-6-sol", 1, 1)
     _write_snapshot(module, state)
     lease = module.acquire_lease(state["run_id"], module.EXPERIMENTS)
     endpoint = f"/api/experiments/{state['run_id']}"
@@ -346,7 +356,7 @@ def test_missing_gcsfuse_returns_service_unavailable(client, module, monkeypatch
     monkeypatch.setattr(lease_module, "get_backend", unavailable)
     request_data = {
         "api_key": "sample-secret",
-        "model": "openai/gpt-4o",
+        "model": "openai/gpt-6-sol",
         "batches": 1,
         "turns": 1,
     }
@@ -371,7 +381,7 @@ def test_preview_resume_releases_lease_after_unwrapped_snapshot_read_error(
     monkeypatch.setattr(SnapshotFencer, "load_run", failed_read)
     request_data = {
         "api_key": "sample-secret",
-        "model": "openai/gpt-4o",
+        "model": "openai/gpt-6-sol",
         "batches": 1,
         "turns": 1,
         "resume_run_id": run_id,
@@ -401,7 +411,7 @@ def test_streamed_failures_are_sanitized(client, module, monkeypatch, failure):
     monkeypatch.setattr(module, "run_experiment", fake)
     response = client.post(
         "/api/experiments/stream",
-        json={"api_key": "sample-secret", "model": "openai/gpt-4o", "batches": 1, "turns": 1},
+        json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "batches": 1, "turns": 1},
     )
     events = [json.loads(line) for line in response.text.splitlines()]
     assert events[-1]["type"] == "error"
@@ -412,7 +422,7 @@ def test_workload_limits(client):
     """Reject excess work before producing a streaming response."""
     response = client.post(
         "/api/experiments/stream",
-        json={"api_key": "x", "model": "openai/gpt-4o", "batches": 3, "turns": 1},
+        json={"api_key": "x", "model": "openai/gpt-6-sol", "batches": 3, "turns": 1},
     )
     assert response.status_code == 400
     assert response.content_type == "application/json"

@@ -138,6 +138,12 @@ Start the development server.
 
 Open the root page and enter an OpenRouter key. Select a model and an experiment type.
 
+The model menu currently offers Gemini 3.8 Flash, GPT-6 Sol, Claude Sonnet 5, and
+Llama 4 Maverick. These exact OpenRouter model identifiers were verified against
+the provider catalog on 2026-09-24. Exact identifiers make a study more
+reproducible than moving `latest` aliases, but the catalog can change. Verify
+availability before you start a large study.
+
 * **Short preview:** This mode uses all four variants. It makes a maximum of 12 generation calls.
 * **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 generation calls.
 
@@ -153,11 +159,11 @@ This command runs two models and uses the optional word list and judge:
 
 ```sh
 python -m ste.research \
-  --models google/gemini-2.0-flash-001 openai/gpt-4o \
+  --models google/gemini-3.8-flash openai/gpt-6-sol \
   --sessions 6 --depths 1 6 12 --seed 20260916 \
   --budget-usd 40 --provider-timeout 120 \
   --approved-words /secure/approved_words.txt \
-  --judge-model anthropic/claude-sonnet-4.5 --judge-timeout 120 \
+  --judge-model anthropic/claude-sonnet-5 --judge-timeout 120 \
   --state /durable/research/RUN.json --yes
 ```
 
