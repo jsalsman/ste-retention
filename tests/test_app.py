@@ -80,6 +80,9 @@ def test_static_page_contract():
     assert all(
         asset in page for asset in ("static/styles.css", "static/app.js", "static/loading.gif")
     )
+    # Experiment help must visibly separate protocol prompts from the free-form workflow.
+    prompt_distinction = "Experiments use the predefined prompt pool, not text entered under"
+    assert prompt_distinction in page
     assert 'aria-live="polite"' in page
     overlay = page.split('id="loading-overlay"', 1)[1]
     assert 'id="cancel"' in overlay and page.count('id="cancel"') == 1
@@ -88,6 +91,7 @@ def test_static_page_contract():
 
     # Request cleanup must restore disabled state for hidden required mode fields.
     script = (ROOT / "static" / "app.js").read_text()
+    assert script.count(prompt_distinction) == 2
     cleanup = script.split("function setRunning", 1)[1].split("async function askModel", 1)[0]
     assert "showMode();" in cleanup
     # Interaction output stays inert and explicitly distinguishes partial generations.

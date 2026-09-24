@@ -155,6 +155,11 @@ availability before you start a large study.
 * **Short preview:** This mode uses all four variants. It makes a maximum of 12 generation calls.
 * **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 generation calls.
 
+“Try one prompt” and experiments are separate workflows. The free-form prompt is
+sent only to `/api/interact` for a single response. Short previews and full research
+studies do not use that text; they select their experiment prompts from
+`ste/protocol.py::PROMPT_POOL`.
+
 The server sends newline-delimited JSON (NDJSON). Each line is one valid JSON object. The server saves each paid response before it reports completion.
 
 A browser, proxy, or server timeout can stop a full study. Streaming does not extend the Cloud Run request limit. Copy the run ID. Select the same mode and settings, enter the run ID, and supply a new API key to resume.

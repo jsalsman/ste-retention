@@ -27,8 +27,8 @@
     for (const input of researchOptions.querySelectorAll("input")) input.disabled = !research;
     // State the paid workload before the user submits the form.
     document.querySelector("#mode-help").textContent = research
-      ? "The full protocol is resumable and can take longer than the web request limit."
-      : "The preview uses all four variants and makes at most 12 calls.";
+      ? "The full protocol is resumable and can take longer than the web request limit. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”"
+      : "The preview uses all four variants and makes at most 12 calls. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”";
   }
 
   /** Read and validate the shared credential without copying it into browser storage. */
