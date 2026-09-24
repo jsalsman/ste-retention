@@ -10,6 +10,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from ste.protocol import PROTOCOL_VERSION, SCHEMA_VERSION, SCORING_VERSION, VARIANTS
+from ste.runs.backend import (
+    LeaseUnavailableError,
+    StorageBackend,
+    get_backend,
+    is_precondition_failed,
+    read_blob,
+)
+from ste.runs.lease import RunActiveError
 
 # Run identifiers are deliberately narrow because they become file names below.
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
@@ -32,7 +40,7 @@ def _lock(run_id: str) -> threading.Lock:
     with _LOCKS_GUARD:
         # A lock prevents native Gunicorn threads from corrupting one run snapshot.
         lock = _LOCKS.setdefault(run_id, threading.Lock())
-    # Multi-instance exclusion belongs at the service/routing layer when using GCS FUSE.
+    # This lock provides thread safety for local writes within this process only.
     return lock
 
 
@@ -51,8 +59,9 @@ def create_run(
     turns: int,
     *,
     seed: int | None = None,
+    persist: bool = True,
 ) -> dict:
-    """Create and durably save metadata for a new bounded experiment run."""
+    """Create metadata and optionally save a new bounded experiment run locally."""
     run_id = uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
     # Credentials are intentionally absent from the complete persisted schema.
@@ -71,18 +80,18 @@ def create_run(
         "updated_at": now,
         "records": [],
     }
-    save_run(directory, state)
+    # Web callers defer the first write until after acquiring a fenced lease.
+    if persist:
+        save_run(directory, state)
     return state
 
 
-def load_run(directory: Path, run_id: str) -> dict:
-    """Load and validate a saved run snapshot for safe resumption."""
-    path = _path(directory, run_id)
+def parse_run(contents: str | bytes, run_id: str) -> dict:
+    """Decode and validate preview snapshot content from either persistence backend."""
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RunStoreError("The requested experiment run was not found.") from exc
-    except (OSError, json.JSONDecodeError) as exc:
+        # Central parsing keeps API and filesystem reads under identical validation.
+        state = json.loads(contents)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
         raise RunStoreError("The saved experiment run is unavailable or malformed.") from exc
     required = {
         "schema_version",
@@ -153,6 +162,19 @@ def load_run(directory: Path, run_id: str) -> dict:
     return state
 
 
+def load_run(directory: Path, run_id: str) -> dict:
+    """Load and validate a saved run snapshot for safe resumption."""
+    path = _path(directory, run_id)
+    try:
+        # Ordinary status and leaderboard reads intentionally remain mount-based.
+        contents = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise RunStoreError("The requested experiment run was not found.") from exc
+    except OSError as exc:
+        raise RunStoreError("The saved experiment run is unavailable or malformed.") from exc
+    return parse_run(contents, run_id)
+
+
 def save_run(directory: Path, state: dict) -> None:
     """Replace one run snapshot after flushing it, suitable for a mounted durable volume."""
     run_id = str(state.get("run_id", ""))
@@ -170,6 +192,97 @@ def save_run(directory: Path, state: dict) -> None:
         os.fsync(handle.fileno())
         # Replacement prevents readers from observing a partly written JSON document.
         os.replace(temporary, path)
+
+
+class SnapshotFencer:
+    """Read and conditionally write one leased web snapshot across both backends.
+
+    The current GCS generation remains process memory only. Every Cloud Storage write
+    is conditioned on that generation, preventing a stale lease owner from replacing
+    a successor's checkpoint or recreating a conditionally deleted snapshot.
+    """
+
+    def __init__(self, directory: Path, run_id: str, backend: StorageBackend | None = None):
+        """Bind a validated run path with no known generation for a new snapshot."""
+        self.directory = directory
+        self.run_id = run_id
+        self.path = _path(directory, run_id)
+        # Reusing lease backend state avoids any second probe or client construction.
+        self.backend = backend or get_backend(directory)
+        self.generation = 0 if self.backend.is_gcs else None
+        self.deleted = False
+        self.fenced = False
+
+    def read_bytes(self) -> bytes:
+        """Read fresh snapshot bytes and remember the observed object generation."""
+        if not self.backend.is_gcs:
+            # Local filesystem reads participate in the existing validation pipeline.
+            return self.path.read_bytes()
+        contents, generation = read_blob(
+            self.backend.bucket, self.backend.object_name(f"{self.run_id}.json")
+        )
+        self.generation = generation
+        return contents
+
+    def load_run(self) -> dict:
+        """Read a fresh preview snapshot and apply the shared preview validation."""
+        # Parsing remains centralized in ``parse_run`` for both backend types.
+        return parse_run(self.read_bytes(), self.run_id)
+
+    def write(self, state: dict) -> None:
+        """Persist a credential-free snapshot with a GCS generation precondition."""
+        if self.deleted or self.fenced:
+            raise RunActiveError("Experiment ownership changed; this request stopped.")
+        # Defensive guards apply to terminal and cleanup writes as well as checkpoints.
+        if any(key.lower() in {"api_key", "authorization"} for key in state):
+            raise RunStoreError("Credential fields cannot be persisted.")
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        snapshot = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        if not self.backend.is_gcs:
+            # Local storage retains its atomic temp-file replacement implementation.
+            save_run(self.directory, state)
+            return
+        blob = self.backend.bucket.blob(self.backend.object_name(f"{self.run_id}.json"))
+        try:
+            blob.upload_from_string(
+                snapshot.encode("utf-8"),
+                content_type="application/json",
+                if_generation_match=self.generation,
+            )
+            self.generation = int(blob.generation)
+        except Exception as exc:
+            if not is_precondition_failed(exc):
+                raise LeaseUnavailableError("Cloud Storage checkpoint write failed.") from exc
+            self._adopt_ambiguous_write(state["updated_at"])
+
+    def _adopt_ambiguous_write(self, updated_at: str) -> None:
+        """Adopt a completed ambiguous upload or reject another owner's snapshot."""
+        try:
+            contents, generation = read_blob(
+                self.backend.bucket, self.backend.object_name(f"{self.run_id}.json")
+            )
+            stored = json.loads(contents)
+        except Exception as exc:
+            raise RunActiveError("Experiment ownership changed; this request stopped.") from exc
+        # updated_at is freshly generated for each attempted write and acts as retry ID.
+        if not isinstance(stored, dict) or stored.get("updated_at") != updated_at:
+            # Cleanup handlers see this flag and make no second API write attempt.
+            self.fenced = True
+            raise RunActiveError("Experiment ownership changed; this request stopped.")
+        self.generation = generation
+
+    def delete(self) -> None:
+        """Delete the observed snapshot generation so stale writers remain fenced."""
+        if not self.backend.is_gcs:
+            # Local deletion remains protected by the held flock lease.
+            self.path.unlink()
+            self.deleted = True
+            return
+        if self.generation in (None, 0):
+            self.read_bytes()
+        blob = self.backend.bucket.blob(self.backend.object_name(f"{self.run_id}.json"))
+        blob.delete(if_generation_match=self.generation)
+        self.deleted = True
 
 
 def _load_research_run(path: Path) -> dict:

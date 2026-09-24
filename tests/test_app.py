@@ -259,6 +259,22 @@ def test_delete_rejects_active_run_then_removes_idle_snapshot(client, module):
     assert not (module.EXPERIMENTS / f"{state['run_id']}.json").exists()
 
 
+def test_cloud_run_without_gcsfuse_returns_service_unavailable(client, module, monkeypatch):
+    """Map unsafe Cloud Run storage detection to a sanitized HTTP 503 response."""
+    monkeypatch.setenv("K_SERVICE", "ste-retention")
+    request_data = {
+        "api_key": "sample-secret",
+        "model": "openai/gpt-4o",
+        "batches": 1,
+        "turns": 1,
+    }
+    # The isolated temporary directory cannot appear as a gcsfuse mount in /proc.
+    response = client.post("/api/experiments/stream", json=request_data)
+    assert response.status_code == 503
+    assert "required Cloud Storage volume" in response.json["error"]
+    assert b"sample-secret" not in response.data
+
+
 @pytest.mark.parametrize(
     "failure", [TimeoutError(), RuntimeError("Authorization: Bearer sample-secret")]
 )

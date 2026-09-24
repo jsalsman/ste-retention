@@ -2,7 +2,7 @@
 
 import pytest
 
-from ste.runs.lease import RunActiveError, acquire_lease
+from ste.runs.lease import LeaseUnavailableError, RunActiveError, acquire_lease
 
 
 def test_local_lease_rejects_concurrent_owner_and_allows_release(tmp_path):
@@ -20,21 +20,16 @@ def test_local_lease_rejects_concurrent_owner_and_allows_release(tmp_path):
     second.release()
 
 
-def test_unsupported_flock_uses_timestamp_fallback(tmp_path, monkeypatch):
-    """Use live timestamp metadata when a FUSE implementation rejects file locking."""
+def test_unsupported_flock_raises_lease_unavailable(tmp_path, monkeypatch):
+    """Reject a local filesystem whose flock implementation is unsupported."""
     import ste.runs.lease as run_lease
 
     def unsupported(*_args):
         """Represent a mounted filesystem without flock support."""
-        # The production code must recover rather than failing the whole experiment.
+        # Unsupported locking cannot provide safe ownership across containers.
         raise OSError("locking unsupported")
 
     monkeypatch.setattr(run_lease.fcntl, "flock", unsupported)
-    first = acquire_lease("c" * 32, tmp_path)
-    try:
-        # A recent fallback heartbeat still rejects a second same-run request.
-        with pytest.raises(RunActiveError):
-            acquire_lease("c" * 32, tmp_path)
-        first.heartbeat()
-    finally:
-        first.release()
+    # Surface a sanitized availability failure instead of claiming unsafe ownership.
+    with pytest.raises(LeaseUnavailableError, match="locking is unavailable"):
+        acquire_lease("c" * 32, tmp_path)
