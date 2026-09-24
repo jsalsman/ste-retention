@@ -80,12 +80,13 @@ DEFAULT_SESSIONS_PER_BATCH = 6
 DEFAULT_MAX_BATCHES = 6
 
 # Model policy is an explicit allow-list because callers supply paid credentials.
+# Exact OpenRouter identifiers keep each experiment reproducible as aliases move.
 ALLOWED_MODELS = frozenset(
     {
-        "anthropic/claude-sonnet-4.5",
-        "openai/gpt-4o",
-        "google/gemini-2.0-flash-001",
-        "meta-llama/llama-3.3-70b-instruct",
+        "anthropic/claude-sonnet-5",
+        "openai/gpt-6-sol",
+        "google/gemini-3.8-flash",
+        "meta-llama/llama-4-maverick",
     }
 )
 

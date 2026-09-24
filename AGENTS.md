@@ -26,3 +26,4 @@
 - A generation-precondition failure can follow a committed ambiguous retry. Re-read through the API and adopt the generation only when the stored owner or write marker matches the request.
 - Cache verified storage backends and deterministic missing-mount results only. Retry transient ADC, probe, and Cloud Storage API failures on later requests, and release an acquired lease when its authoritative snapshot read fails.
 - Heartbeat immediately before exception or cancellation cleanup writes. Snapshot generation fencing alone does not prove lease ownership during the gap between an expired takeover and the successor's first write.
+- Verify selectable models against OpenRouter's live catalog, and prefer exact model identifiers over moving aliases so experiment records remain reproducible.

@@ -38,7 +38,7 @@ def test_full_protocol_and_deterministic_shared_sequence():
 
 def test_research_depth_cannot_exceed_non_repeating_pool():
     """Reject protocol configurations that require reusing a prompt in one session."""
-    config = ResearchConfig(("openai/gpt-4o",), 1, (len(PROMPT_POOL) + 1,))
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (len(PROMPT_POOL) + 1,))
     # Both the public configuration and lower-level sequence helper fail explicitly.
     with pytest.raises(ValueError, match="non-repeating prompt pool"):
         config.validate()
@@ -49,7 +49,7 @@ def test_research_depth_cannot_exceed_non_repeating_pool():
 @pytest.mark.parametrize("depths", [(-1, 1), (0, 1), (1, 2.5, 3), (True, 2)])
 def test_research_config_validates_every_requested_depth(depths):
     """Reject invalid early and middle depths even when the final depth is valid."""
-    config = ResearchConfig(("openai/gpt-4o",), 1, depths)
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, depths)
     # Validation must inspect each requested probe rather than relying on the maximum.
     # This prevents a run from silently omitting an invalid requested record.
     with pytest.raises(ValueError, match="Research depth is out of range"):
@@ -59,7 +59,7 @@ def test_research_config_validates_every_requested_depth(depths):
 def test_completed_records_loads_completed_research_schema(tmp_path):
     """Expose completed worker snapshots without applying the preview resume schema."""
     run_id = "c" * 32
-    config = ResearchConfig(("openai/gpt-4o",), 1, (1,))
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,))
     state = new_state(config, run_id)
     # This is the versioned record shape emitted by the asynchronous research worker.
     record = {
@@ -69,7 +69,7 @@ def test_completed_records_loads_completed_research_schema(tmp_path):
         "run_mode": "research",
         "run_id": run_id,
         "session": 1,
-        "model": "openai/gpt-4o",
+        "model": "openai/gpt-6-sol",
         "variant": "bare",
         "depth": 1,
         "score": 75.0,
@@ -85,7 +85,7 @@ def test_load_state_rejects_snapshot_from_repeating_prompt_protocol(tmp_path):
     """Reject paid partial results whose prompts came from the prior algorithm."""
     path = tmp_path / "legacy.json"
     run_id = "d" * 32
-    config = ResearchConfig(("openai/gpt-4o",), 1, (1,), seed=3)
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,), seed=3)
     state = new_state(config, run_id)
     # Version 2.0 sampled prompts with replacement, making its saved units unsafe to resume.
     state["protocol_version"] = "ste-retention-2.0"
@@ -126,7 +126,7 @@ def test_malformed_judge_output_is_rejected(raw):
 
 def test_research_resumes_inside_partial_arm_without_repeating_calls(tmp_path):
     """Rebuild context and skip completed paid units at the next missing turn."""
-    config = ResearchConfig(("openai/gpt-4o",), 1, (1, 2), seed=7)
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1, 2), seed=7)
     state = new_state(config, "a" * 32)
     calls = []
 
@@ -156,7 +156,7 @@ def test_research_resumes_inside_partial_arm_without_repeating_calls(tmp_path):
 def test_resume_rejects_changed_configuration_and_duplicate_units(tmp_path):
     """Reject changed semantics and duplicate idempotency units before paid work."""
     path = tmp_path / "run.json"
-    config = ResearchConfig(("openai/gpt-4o",), 1, (1,), seed=3)
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,), seed=3)
     state = new_state(config, "b" * 32)
     state["units"] = [{"unit_id": "same"}, {"unit_id": "same"}]
     save_state(path, state)
@@ -164,6 +164,6 @@ def test_resume_rejects_changed_configuration_and_duplicate_units(tmp_path):
         load_state(path, config, "b" * 32)
     state["units"] = []
     save_state(path, state)
-    changed = ResearchConfig(("openai/gpt-4o",), 1, (1,), seed=4)
+    changed = ResearchConfig(("openai/gpt-6-sol",), 1, (1,), seed=4)
     with pytest.raises(ValueError):
         load_state(path, changed, "b" * 32)
