@@ -244,6 +244,54 @@ def test_interrupted_run_is_persisted_and_can_resume(client, module, monkeypatch
     assert saved["status"] == "complete"
 
 
+def test_lost_lease_cannot_write_interrupted_cleanup_snapshot(client, module, monkeypatch):
+    """Reject cleanup writes after a successor takes over an expired request lease."""
+    observed = {}
+
+    def stolen_lease(*_args, run_id, **_kwargs):
+        """Replace lease ownership before failing the simulated experiment worker."""
+        snapshot_name = f"{run_id}.json"
+        lease_name = f"leases/{run_id}.lock"
+        observed["snapshot_generation"] = module.TEST_BUCKET.objects[snapshot_name].generation
+        current = module.TEST_BUCKET.objects[lease_name]
+        winner = {
+            "owner_id": "successor-owner",
+            "heartbeat_at": datetime.now(timezone.utc).isoformat(),
+            "lease_expires_at": (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat(),
+        }
+        # This models takeover before the successor's first snapshot checkpoint.
+        module.TEST_BUCKET.blob(lease_name).upload_from_string(
+            json.dumps(winner),
+            content_type="application/json",
+            if_generation_match=current.generation,
+        )
+        # The stale worker then enters its exception cleanup path.
+        raise TimeoutError
+        yield  # pragma: no cover - keeps this injected worker a generator
+
+    monkeypatch.setattr(module, "run_experiment", stolen_lease)
+    response = client.post(
+        "/api/experiments/stream",
+        json={
+            "api_key": "sample-secret",
+            "model": "openai/gpt-4o",
+            "batches": 1,
+            "turns": 1,
+        },
+    )
+    events = [json.loads(line) for line in response.text.splitlines()]
+    run_id = events[-1]["run_id"]
+    stored = json.loads(module.TEST_BUCKET.objects[f"{run_id}.json"].contents)
+    # Heartbeat rejection prevents the stale request from writing interrupted state.
+    assert stored["status"] == "running"
+    assert (
+        module.TEST_BUCKET.objects[f"{run_id}.json"].generation == observed["snapshot_generation"]
+    )
+    # Stale release is also fenced and leaves the successor's lease intact.
+    lease = json.loads(module.TEST_BUCKET.objects[f"leases/{run_id}.lock"].contents)
+    assert lease["owner_id"] == "successor-owner"
+
+
 def test_run_status_distinguishes_active_stalled_and_complete(client, module):
     """Derive liveness from durable heartbeat expiry without exposing record text."""
     state = module.create_run("openai/gpt-4o", 1, 1)

@@ -217,7 +217,9 @@ def experiment_stream():
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
-                    # Preserve completed checkpoints unless ownership fencing rejected us.
+                    # Prove current lease ownership before any exception cleanup write.
+                    lease.heartbeat()
+                    # The renewed lease closes the expiry-to-successor snapshot race.
                     snapshots.write(state)
                 except (OSError, RunStoreError, RunActiveError, LeaseUnavailableError):
                     pass
@@ -241,6 +243,9 @@ def experiment_stream():
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
+                    # Cancellation cleanup must also prove the lease was not taken over.
+                    lease.heartbeat()
+                    # Only a currently fenced owner may mark the snapshot interrupted.
                     snapshots.write(state)
                 except (OSError, RunStoreError, RunActiveError, LeaseUnavailableError):
                     # The connection is already closing, so no response channel remains.
@@ -387,7 +392,9 @@ def _research_stream(data: dict, api_key: str) -> Response:
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
-                    # Preserve completed work unless storage or ownership fencing failed.
+                    # Prove current lease ownership before any exception cleanup write.
+                    lease.heartbeat()
+                    # The renewed lease closes the expiry-to-successor snapshot race.
                     snapshots.write(state)
                 except (OSError, RunStoreError, RunActiveError, LeaseUnavailableError):
                     # The sanitized stream event remains useful when persistence is down.
@@ -414,7 +421,9 @@ def _research_stream(data: dict, api_key: str) -> Response:
                 state["status"] = "interrupted"
                 state["lease_expires_at"] = None
                 try:
-                    # Make cancellation resumable before giving another request the lease.
+                    # Cancellation cleanup must also prove the lease was not taken over.
+                    lease.heartbeat()
+                    # Only a currently fenced owner may mark the snapshot interrupted.
                     snapshots.write(state)
                 except (OSError, RunStoreError, RunActiveError, LeaseUnavailableError):
                     # No response channel remains during close, so cleanup is best effort.
