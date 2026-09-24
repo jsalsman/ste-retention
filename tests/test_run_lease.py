@@ -1,40 +1,41 @@
-"""Lease tests that never contact Cloud Storage or require cloud credentials."""
+"""Public lease-interface tests that use no network or cloud credentials."""
 
 import pytest
 
+import ste.runs.lease as run_lease
+from ste.runs.backend import GCSMount, LeaseUnavailableError, StorageBackend
 from ste.runs.lease import RunActiveError, acquire_lease
+from tests.fake_gcs import FakeBucket
 
 
-def test_local_lease_rejects_concurrent_owner_and_allows_release(tmp_path):
+def test_gcs_lease_rejects_concurrent_owner_and_allows_release(tmp_path, monkeypatch):
     """Serialize same-run requests while allowing ownership after explicit release."""
+    bucket = FakeBucket()
+    backend = StorageBackend(tmp_path, GCSMount(tmp_path, "bucket", ""), bucket)
+    # Injecting the verified backend keeps this public-interface test offline.
+    monkeypatch.setattr(run_lease, "get_backend", lambda _directory: backend)
     run_id = "b" * 32
     first = acquire_lease(run_id, tmp_path)
     try:
-        # A second user cannot repeat paid work while the first heartbeat is live.
+        # A second request cannot repeat paid work while the first lease is live.
         with pytest.raises(RunActiveError):
             acquire_lease(run_id, tmp_path)
     finally:
         first.release()
     second = acquire_lease(run_id, tmp_path)
-    # Cleanup keeps the process-global development backend isolated for later tests.
+    # Conditional deletion makes the lease available for a later request.
     second.release()
 
 
-def test_unsupported_flock_uses_timestamp_fallback(tmp_path, monkeypatch):
-    """Use live timestamp metadata when a FUSE implementation rejects file locking."""
-    import ste.runs.lease as run_lease
+def test_missing_gcs_mount_raises_lease_unavailable(tmp_path, monkeypatch):
+    """Refuse lease work when mandatory Cloud Storage mapping is unavailable."""
 
-    def unsupported(*_args):
-        """Represent a mounted filesystem without flock support."""
-        # The production code must recover rather than failing the whole experiment.
-        raise OSError("locking unsupported")
+    def unavailable(_directory):
+        """Represent backend detection without the required gcsfuse mount."""
+        # No process-local fallback is supported by the web coordination layer.
+        raise LeaseUnavailableError("Cloud Storage volume is unavailable.")
 
-    monkeypatch.setattr(run_lease.fcntl, "flock", unsupported)
-    first = acquire_lease("c" * 32, tmp_path)
-    try:
-        # A recent fallback heartbeat still rejects a second same-run request.
-        with pytest.raises(RunActiveError):
-            acquire_lease("c" * 32, tmp_path)
-        first.heartbeat()
-    finally:
-        first.release()
+    monkeypatch.setattr(run_lease, "get_backend", unavailable)
+    # Surface a sanitized availability failure rather than unsafe ownership.
+    with pytest.raises(LeaseUnavailableError, match="volume is unavailable"):
+        acquire_lease("c" * 32, tmp_path)

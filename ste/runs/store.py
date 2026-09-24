@@ -4,18 +4,23 @@ import json
 import math
 import os
 import re
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from ste.protocol import PROTOCOL_VERSION, SCHEMA_VERSION, SCORING_VERSION, VARIANTS
+from ste.runs.backend import (
+    LeaseUnavailableError,
+    StorageBackend,
+    get_backend,
+    is_precondition_failed,
+    read_blob,
+)
+from ste.runs.lease import RunActiveError
 
 # Run identifiers are deliberately narrow because they become file names below.
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
 VALID_VARIANTS = frozenset(VARIANTS)
-_LOCKS: dict[str, threading.Lock] = {}
-_LOCKS_GUARD = threading.Lock()
 
 
 class RunStoreError(ValueError):
@@ -27,15 +32,6 @@ class RunStoreError(ValueError):
 SNAPSHOT_LOAD_ERRORS = (OSError, json.JSONDecodeError, RunStoreError)
 
 
-def _lock(run_id: str) -> threading.Lock:
-    """Return the process-local lock that serializes updates for one run identifier."""
-    with _LOCKS_GUARD:
-        # A lock prevents native Gunicorn threads from corrupting one run snapshot.
-        lock = _LOCKS.setdefault(run_id, threading.Lock())
-    # Multi-instance exclusion belongs at the service/routing layer when using GCS FUSE.
-    return lock
-
-
 def _path(directory: Path, run_id: str) -> Path:
     """Resolve a validated run identifier beneath the configured persistence directory."""
     if not RUN_ID.fullmatch(run_id):
@@ -45,14 +41,13 @@ def _path(directory: Path, run_id: str) -> Path:
 
 
 def create_run(
-    directory: Path,
     model: str,
     batches: int,
     turns: int,
     *,
     seed: int | None = None,
 ) -> dict:
-    """Create and durably save metadata for a new bounded experiment run."""
+    """Create credential-free metadata for a new bounded web experiment run."""
     run_id = uuid4().hex
     now = datetime.now(timezone.utc).isoformat()
     # Credentials are intentionally absent from the complete persisted schema.
@@ -71,18 +66,16 @@ def create_run(
         "updated_at": now,
         "records": [],
     }
-    save_run(directory, state)
+    # The caller acquires a lease before conditionally creating this random run ID.
     return state
 
 
-def load_run(directory: Path, run_id: str) -> dict:
-    """Load and validate a saved run snapshot for safe resumption."""
-    path = _path(directory, run_id)
+def parse_run(contents: str | bytes, run_id: str) -> dict:
+    """Decode and validate preview snapshot content from either persistence backend."""
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RunStoreError("The requested experiment run was not found.") from exc
-    except (OSError, json.JSONDecodeError) as exc:
+        # Central parsing keeps API and filesystem reads under identical validation.
+        state = json.loads(contents)
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
         raise RunStoreError("The saved experiment run is unavailable or malformed.") from exc
     required = {
         "schema_version",
@@ -153,23 +146,100 @@ def load_run(directory: Path, run_id: str) -> dict:
     return state
 
 
-def save_run(directory: Path, state: dict) -> None:
-    """Replace one run snapshot after flushing it, suitable for a mounted durable volume."""
-    run_id = str(state.get("run_id", ""))
+def load_run(directory: Path, run_id: str) -> dict:
+    """Load and validate a saved run snapshot for safe resumption."""
     path = _path(directory, run_id)
-    directory.mkdir(parents=True, exist_ok=True)
-    # Defensive serialization rejects accidental credential-shaped top-level fields.
-    if any(key.lower() in {"api_key", "authorization"} for key in state):
-        raise RunStoreError("Credential fields cannot be persisted.")
-    state["updated_at"] = datetime.now(timezone.utc).isoformat()
-    snapshot = dict(state)
-    temporary = path.with_suffix(f".{os.getpid()}.tmp")
-    with _lock(run_id), temporary.open("w", encoding="utf-8") as handle:
-        json.dump(snapshot, handle, ensure_ascii=False, separators=(",", ":"))
-        handle.flush()
-        os.fsync(handle.fileno())
-        # Replacement prevents readers from observing a partly written JSON document.
-        os.replace(temporary, path)
+    try:
+        # Ordinary status and leaderboard reads intentionally remain mount-based.
+        contents = path.read_bytes()
+    except FileNotFoundError as exc:
+        raise RunStoreError("The requested experiment run was not found.") from exc
+    except OSError as exc:
+        raise RunStoreError("The saved experiment run is unavailable or malformed.") from exc
+    return parse_run(contents, run_id)
+
+
+class SnapshotFencer:
+    """Read and conditionally write one leased web snapshot through Cloud Storage.
+
+    The current GCS generation remains process memory only. Every Cloud Storage write
+    is conditioned on that generation, preventing a stale lease owner from replacing
+    a successor's checkpoint or recreating a conditionally deleted snapshot.
+    """
+
+    def __init__(self, directory: Path, run_id: str, backend: StorageBackend | None = None):
+        """Bind a validated run path with no known generation for a new snapshot."""
+        self.directory = directory
+        self.run_id = run_id
+        # Validate the identifier before deriving its Cloud Storage object name.
+        _path(directory, run_id)
+        # Reusing lease backend state avoids any second probe or client construction.
+        self.backend = backend or get_backend(directory)
+        self.generation = 0
+        self.deleted = False
+        self.fenced = False
+
+    def read_bytes(self) -> bytes:
+        """Read fresh snapshot bytes and remember the observed object generation."""
+        # Bypass the mount cache so resumed paid work always sees the latest object.
+        contents, generation = read_blob(
+            self.backend.bucket, self.backend.object_name(f"{self.run_id}.json")
+        )
+        self.generation = generation
+        return contents
+
+    def load_run(self) -> dict:
+        """Read a fresh preview snapshot and apply the shared preview validation."""
+        # Parsing remains centralized in ``parse_run`` for both backend types.
+        return parse_run(self.read_bytes(), self.run_id)
+
+    def write(self, state: dict) -> None:
+        """Persist a credential-free snapshot with a GCS generation precondition."""
+        if self.deleted or self.fenced:
+            raise RunActiveError("Experiment ownership changed; this request stopped.")
+        # Defensive guards apply to terminal and cleanup writes as well as checkpoints.
+        if any(key.lower() in {"api_key", "authorization"} for key in state):
+            raise RunStoreError("Credential fields cannot be persisted.")
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        snapshot = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        # Web writes never use the mounted path because rename is not an atomic fence.
+        blob = self.backend.bucket.blob(self.backend.object_name(f"{self.run_id}.json"))
+        try:
+            blob.upload_from_string(
+                snapshot.encode("utf-8"),
+                content_type="application/json",
+                if_generation_match=self.generation,
+            )
+            self.generation = int(blob.generation)
+        except Exception as exc:
+            if not is_precondition_failed(exc):
+                raise LeaseUnavailableError("Cloud Storage checkpoint write failed.") from exc
+            self._adopt_ambiguous_write(state["updated_at"])
+
+    def _adopt_ambiguous_write(self, updated_at: str) -> None:
+        """Adopt a completed ambiguous upload or reject another owner's snapshot."""
+        try:
+            contents, generation = read_blob(
+                self.backend.bucket, self.backend.object_name(f"{self.run_id}.json")
+            )
+            stored = json.loads(contents)
+        except Exception as exc:
+            raise RunActiveError("Experiment ownership changed; this request stopped.") from exc
+        # updated_at is freshly generated for each attempted write and acts as retry ID.
+        if not isinstance(stored, dict) or stored.get("updated_at") != updated_at:
+            # Cleanup handlers see this flag and make no second API write attempt.
+            self.fenced = True
+            raise RunActiveError("Experiment ownership changed; this request stopped.")
+        self.generation = generation
+
+    def delete(self) -> None:
+        """Delete the observed snapshot generation so stale writers remain fenced."""
+        if self.generation in (None, 0):
+            # Observe the exact generation before conditionally deleting it.
+            self.read_bytes()
+        blob = self.backend.bucket.blob(self.backend.object_name(f"{self.run_id}.json"))
+        blob.delete(if_generation_match=self.generation)
+        self.deleted = True
 
 
 def _load_research_run(path: Path) -> dict:
