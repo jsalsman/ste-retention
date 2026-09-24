@@ -70,7 +70,7 @@ def test_static_page_contract():
     page = (ROOT / "index.html").read_text()
     assert "Jim Salsman" in page
     # Header credits must lead directly to the author's profile and project source.
-    assert '<a href="http://linkedin.com/in/jsalsman">Jim Salsman</a>' in page
+    assert '<a href="https://linkedin.com/in/jsalsman">Jim Salsman</a>' in page
     assert '<a href="https://github.com/jsalsman/ste-retention">STE Retention Lab</a>' in page
     # Every server-approved model must be exposed by the standalone form.
     assert all(f'value="{model}"' in page for model in ALLOWED_MODELS)
