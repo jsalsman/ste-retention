@@ -138,6 +138,14 @@ Start the development server.
 
 Open the root page and enter an OpenRouter key. Select a model and an experiment type.
 
+For a single interaction, the server validates both the returned message text and
+the provider's finish reason. A token-limit finish returns the available text as
+plain text and labels it incomplete, so the browser warns that the displayed text
+may be truncated. Malformed provider metadata and provider failures produce a
+sanitized error without returning credentials or the provider response body.
+Preview and research runners likewise unwrap validated completions to plain text;
+they checkpoint safe partial text when a token limit ends a generation.
+
 The model menu currently offers Gemini 3.8 Flash, GPT-6 Sol, Claude Sonnet 5, and
 Llama 4 Maverick. These exact OpenRouter model identifiers were verified against
 the provider catalog on 2026-09-24. Exact identifiers make a study more

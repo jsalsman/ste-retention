@@ -74,7 +74,10 @@
       if (!response.ok) throw new Error(data.error || "The request failed.");
       // textContent makes model-generated markup inert.
       result.textContent = data.answer;
-      status.textContent = "Response received.";
+      // Explicit completion status prevents truncated text from appearing definitive.
+      status.textContent = data.complete
+        ? "Response received."
+        : "Incomplete response received; the displayed text may be truncated.";
     } catch (error) {
       status.textContent = error.name === "AbortError" ? "Request cancelled." : "The request could not be completed.";
       result.textContent = "No response is available.";

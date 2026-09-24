@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from hashlib import sha256
 
-from ste.models.openrouter import chat
+from ste.models.openrouter import chat_text
 from ste.protocol import (
     ALLOWED_MODELS,
     PREVIEW_DEADLINE_SECONDS,
@@ -53,7 +53,7 @@ def run_experiment(
     batches: int,
     turns: int,
     *,
-    request: Callable[..., str] = chat,
+    request: Callable[..., str] = chat_text,
     clock: Callable[[], float] = time.monotonic,
     existing_records: list[dict] | None = None,
     persist: Callable[[list[dict]], None] | None = None,

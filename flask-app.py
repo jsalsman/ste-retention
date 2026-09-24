@@ -9,7 +9,7 @@ from flask import Flask, Response, jsonify, request, send_file, stream_with_cont
 
 from ste.experiment import ALLOWED_MODELS, UPSTREAM_TIMEOUT_SECONDS, run_experiment, validate_run
 from ste.leaderboard import render_file, render_leaderboard
-from ste.models.openrouter import UpstreamError, chat
+from ste.models.openrouter import IncompleteGenerationError, UpstreamError, chat
 from ste.records import RecordError
 from ste.research import ResearchConfig, load_state, new_state, parse_state, run_research
 from ste.runs.backend import LeaseUnavailableError, is_not_found
@@ -97,10 +97,18 @@ def interact():
         if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 2000:
             raise ValueError("Prompt text must contain between 1 and 2,000 characters.")
         # The credential exists only in this call frame and never enters the response.
-        answer = chat(api_key, model, [{"role": "user", "content": prompt.strip()}])
-        return jsonify(answer=answer)
+        completion = chat(api_key, model, [{"role": "user", "content": prompt.strip()}])
+        # Return only validated completion metadata and model-generated plain text.
+        return jsonify(
+            answer=completion.content,
+            complete=completion.complete,
+            finish_reason=completion.finish_reason,
+        )
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
+    except IncompleteGenerationError as exc:
+        # Partial text remains useful, while the fixed reason reveals no provider body.
+        return jsonify(answer=exc.content, complete=False, finish_reason=exc.finish_reason)
     except UpstreamError:
         return jsonify(error="The model provider could not complete the request."), 502
 

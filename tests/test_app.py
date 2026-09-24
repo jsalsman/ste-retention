@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import ste.runs.lease as lease_module
+from ste.models.openrouter import ChatCompletion, IncompleteGenerationError
 from ste.protocol import ALLOWED_MODELS
 from ste.runs.backend import GCSMount, StorageBackend
 from ste.runs.store import SnapshotFencer
@@ -93,6 +94,10 @@ def test_static_page_contract():
     assert script.count(prompt_distinction) == 2
     cleanup = script.split("function setRunning", 1)[1].split("async function askModel", 1)[0]
     assert "showMode();" in cleanup
+    # Interaction output stays inert and explicitly distinguishes partial generations.
+    assert "result.textContent = data.answer" in script
+    assert "displayed text may be truncated" in script
+    assert "result.innerHTML" not in script
 
 
 def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch):
@@ -116,12 +121,41 @@ def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch
 def test_interaction_validation_and_mocked_success(client, module, monkeypatch):
     """Reject invalid inputs and return only mocked model output on success."""
     assert client.post("/api/interact", json={}).status_code == 400
-    monkeypatch.setattr(module, "chat", lambda *_args, **_kwargs: "Safe answer")
+    monkeypatch.setattr(
+        module,
+        "chat",
+        lambda *_args, **_kwargs: ChatCompletion("Safe answer", "stop", True),
+    )
     response = client.post(
         "/api/interact",
         json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "prompt": "Hello"},
     )
-    assert response.json == {"answer": "Safe answer"}
+    assert response.json == {
+        "answer": "Safe answer",
+        "complete": True,
+        "finish_reason": "stop",
+    }
+    assert b"sample-secret" not in response.data and b"Authorization" not in response.data
+
+
+def test_interaction_returns_safe_partial_text_for_truncation(client, module, monkeypatch):
+    """Translate explicit provider truncation without leaking credentials or bodies."""
+
+    def truncated(*_args, **_kwargs):
+        """Stand in for a provider that returned useful text before its token limit."""
+        raise IncompleteGenerationError("Partial <strong>model text</strong>")
+
+    monkeypatch.setattr(module, "chat", truncated)
+    response = client.post(
+        "/api/interact",
+        json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "prompt": "Hello"},
+    )
+    assert response.status_code == 200
+    assert response.json == {
+        "answer": "Partial <strong>model text</strong>",
+        "complete": False,
+        "finish_reason": "length",
+    }
     assert b"sample-secret" not in response.data and b"Authorization" not in response.data
 
 
