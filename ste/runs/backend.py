@@ -187,7 +187,8 @@ def get_backend(
             _verify_mapping(resolved, mount, bucket)
         except Exception as exc:
             message = "Cloud Storage mount verification failed."
-            _BACKEND_ERRORS[resolved] = message
+            # Client and probe failures may be transient, so a later request must retry.
+            # In particular, do not add this operational failure to ``_BACKEND_ERRORS``.
             raise LeaseUnavailableError(message) from exc
         backend = StorageBackend(resolved, mount, bucket)
         _BACKENDS[resolved] = backend

@@ -24,3 +24,4 @@
 - In README research history, clearly separate historical adaptive controls and cost estimates from current implemented behavior.
 - Web coordination and fencing writes use the Cloud Storage API with generation preconditions, never the mount. The web service refuses to run leases without its gcsfuse mount; a successful `flock` on FUSE proves nothing across instances.
 - A generation-precondition failure can follow a committed ambiguous retry. Re-read through the API and adopt the generation only when the stored owner or write marker matches the request.
+- Cache verified storage backends and deterministic missing-mount results only. Retry transient ADC, probe, and Cloud Storage API failures on later requests, and release an acquired lease when its authoritative snapshot read fails.

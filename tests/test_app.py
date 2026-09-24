@@ -309,6 +309,31 @@ def test_missing_gcsfuse_returns_service_unavailable(client, module, monkeypatch
     assert b"sample-secret" not in response.data
 
 
+def test_preview_resume_releases_lease_after_unwrapped_snapshot_read_error(
+    client, module, monkeypatch
+):
+    """Release preview ownership when a provider read error escapes validation handlers."""
+    run_id = "8" * 32
+
+    def failed_read(_fencer):
+        """Represent a transient provider exception from the authoritative API read."""
+        # This error deliberately falls outside the route's sanitized validation types.
+        raise RuntimeError("simulated provider failure")
+
+    monkeypatch.setattr(SnapshotFencer, "load_run", failed_read)
+    request_data = {
+        "api_key": "sample-secret",
+        "model": "openai/gpt-4o",
+        "batches": 1,
+        "turns": 1,
+        "resume_run_id": run_id,
+    }
+    # Flask testing mode re-raises the exception after the route releases ownership.
+    with pytest.raises(RuntimeError, match="simulated provider failure"):
+        client.post("/api/experiments/stream", json=request_data)
+    assert f"leases/{run_id}.lock" not in module.TEST_BUCKET.objects
+
+
 @pytest.mark.parametrize(
     "failure", [TimeoutError(), RuntimeError("Authorization: Bearer sample-secret")]
 )

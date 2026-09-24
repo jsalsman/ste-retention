@@ -138,7 +138,14 @@ def experiment_stream():
                 duration_seconds=lease_duration(UPSTREAM_TIMEOUT_SECONDS),
             )
             snapshots = SnapshotFencer(EXPERIMENTS, resume_id, lease.backend)
-            state = snapshots.load_run()
+            try:
+                # A fresh API read can fail with provider errors outside validation types.
+                state = snapshots.load_run()
+            except Exception:
+                # Release immediately so transient read failures do not strand the lease.
+                lease.release()
+                lease = None
+                raise
             # Never resume saved work under changed parameters or a different model.
             if (state["model"], state["batches"], state["turns"]) != (model, batches, turns):
                 raise ValueError("Saved run settings do not match this request.")

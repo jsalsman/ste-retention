@@ -94,3 +94,39 @@ def test_mapping_probe_rejects_missing_or_different_object(tmp_path, monkeypatch
     # All mapping failures collapse to one sanitized operational error.
     with pytest.raises(LeaseUnavailableError, match="verification failed"):
         backend_module._verify_mapping(tmp_path, mount, bucket)
+
+
+def test_transient_mapping_verification_failure_is_retried(tmp_path, monkeypatch):
+    """Retry client or probe failures instead of poisoning the process backend cache."""
+    directory = tmp_path / "experiments"
+    mount = backend_module.GCSMount(directory, "bucket", "")
+    bucket = FakeBucket()
+    attempts = 0
+
+    class FakeClient:
+        """Return the offline bucket used by this backend-verification regression test."""
+
+        def bucket(self, _name):
+            """Return the configured bucket without credentials or network access."""
+            # The mount supplies the name, while this fake owns one isolated bucket.
+            # Returning it directly avoids any client-side state shared with production.
+            return bucket
+
+    def flaky_verify(_directory, _mount, _bucket):
+        """Fail the first mapping probe and allow the following request to recover."""
+        nonlocal attempts
+        # Count calls so the assertion proves that backend detection really retried.
+        attempts += 1
+        # Only the first call models a transient Cloud Storage outage.
+        if attempts == 1:
+            raise OSError("temporary outage")
+
+    monkeypatch.setattr(backend_module, "detect_gcs_mount", lambda *_args: mount)
+    monkeypatch.setattr(backend_module, "_new_client", FakeClient)
+    monkeypatch.setattr(backend_module, "_verify_mapping", flaky_verify)
+    backend_module.reset_backend_cache()
+    # The first request fails safely, but its transient result is not cached.
+    with pytest.raises(LeaseUnavailableError, match="verification failed"):
+        get_backend(directory)
+    assert get_backend(directory).bucket is bucket
+    assert attempts == 2
