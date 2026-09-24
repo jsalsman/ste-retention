@@ -9,7 +9,7 @@ from flask import Flask, Response, jsonify, request, send_file, stream_with_cont
 
 from ste.experiment import ALLOWED_MODELS, UPSTREAM_TIMEOUT_SECONDS, run_experiment, validate_run
 from ste.leaderboard import render_file, render_leaderboard
-from ste.models.openrouter import IncompleteGenerationError, UpstreamError, chat
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, IncompleteGenerationError, UpstreamError, chat
 from ste.records import RecordError
 from ste.research import ResearchConfig, load_state, new_state, parse_state, run_research
 from ste.runs.backend import LeaseUnavailableError, is_not_found
@@ -473,7 +473,7 @@ def experiment_status(run_id: str):
                 config_data.get("provider_timeout", 120.0),
                 config_data.get("judge_model"),
                 config_data.get("judge_timeout", 120.0),
-                config_data.get("max_tokens", 600),
+                config_data.get("max_tokens", DEFAULT_MAX_TOKENS),
             )
             state = load_state(path, config, run_id)
             completed = len(state["units"])

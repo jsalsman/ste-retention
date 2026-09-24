@@ -34,21 +34,45 @@ def test_chat_returns_validated_completion_metadata(monkeypatch):
     )
 
 
-def test_chat_raises_distinct_error_with_partial_text_at_token_limit(monkeypatch):
-    """Preserve partial output while classifying an explicit token-limit finish."""
-    response = _response(
+def test_chat_continues_token_limited_output_until_explicit_stop(monkeypatch):
+    """Combine bounded suffix calls and accept only an explicit natural stop."""
+    partial = _response(
         {"choices": [{"message": {"content": "Partial"}, "finish_reason": "length"}]}
     )
-    # The mock prevents credentials from reaching an external provider.
-    monkeypatch.setattr(openrouter.requests, "post", Mock(return_value=response))
+    complete = _response(
+        {"choices": [{"message": {"content": " ending."}, "finish_reason": "stop"}]}
+    )
+    # The mock provides one truncated chunk followed by its completed suffix.
+    post = Mock(side_effect=(partial, complete))
+    monkeypatch.setattr(openrouter.requests, "post", post)
+
+    result = openrouter.chat("secret", "model", [{"role": "user", "content": "Hi"}])
+
+    # The logical result joins exact chunks and the follow-up includes continuation context.
+    assert result == openrouter.ChatCompletion("Partial ending.", "stop", True)
+    assert post.call_count == 2
+    follow_up = post.call_args_list[1].kwargs["json"]["messages"]
+    assert follow_up[-2:] == [
+        {"role": "assistant", "content": "Partial"},
+        {"role": "user", "content": openrouter.CONTINUATION_PROMPT},
+    ]
+
+
+def test_chat_reports_incomplete_after_bounded_continuations(monkeypatch):
+    """Never present exhausted continuation retries as a completed response."""
+    response = _response(
+        {"choices": [{"message": {"content": "Part"}, "finish_reason": "max_tokens"}]}
+    )
+    # Every local provider response reaches the output limit, exercising the fixed cap.
+    post = Mock(return_value=response)
+    monkeypatch.setattr(openrouter.requests, "post", post)
 
     with pytest.raises(openrouter.IncompleteGenerationError) as caught:
-        # Explicit truncation is distinct from malformed or failed provider responses.
+        # Exhaustion retains safe diagnostic text but cannot satisfy experiment runners.
         openrouter.chat("secret", "model", [{"role": "user", "content": "Hi"}])
 
-    # Safe partial text survives without retaining the credential-bearing response.
-    assert caught.value.content == "Partial"
-    assert "secret" not in str(caught.value)
+    assert caught.value.content == "Part" * (openrouter.MAX_CONTINUATIONS + 1)
+    assert post.call_count == openrouter.MAX_CONTINUATIONS + 1
 
 
 @pytest.mark.parametrize("finish_reason", [None, "", 7, "unexpected"])
@@ -84,8 +108,8 @@ def test_chat_sanitizes_provider_failure(monkeypatch):
     assert "secret" not in str(caught.value) and "provider-body" not in str(caught.value)
 
 
-def test_chat_text_unwraps_complete_and_incomplete_generations(monkeypatch):
-    """Give experiment runners plain text for complete and token-limited responses."""
+def test_chat_text_unwraps_only_complete_generations(monkeypatch):
+    """Give experiment runners plain text only after a verified provider stop."""
     # A normal completion is reduced to the string expected by scoring and persistence.
     monkeypatch.setattr(
         openrouter,
@@ -94,10 +118,11 @@ def test_chat_text_unwraps_complete_and_incomplete_generations(monkeypatch):
     )
     assert openrouter.chat_text("secret", "model", []) == "Complete"
 
-    # Explicitly truncated text remains useful, safe measured work for resumable studies.
+    # Explicitly truncated text must not be scored or persisted as completed work.
     monkeypatch.setattr(
         openrouter,
         "chat",
         Mock(side_effect=openrouter.IncompleteGenerationError("Partial", "length")),
     )
-    assert openrouter.chat_text("secret", "model", []) == "Partial"
+    with pytest.raises(openrouter.IncompleteGenerationError):
+        openrouter.chat_text("secret", "model", [])

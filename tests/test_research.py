@@ -11,6 +11,7 @@ from ste.protocol import (
     STE_RULES,
     VARIANTS,
 )
+from ste.models.openrouter import DEFAULT_MAX_TOKENS
 from ste.research import (
     ResearchConfig,
     load_state,
@@ -44,6 +45,15 @@ def test_research_depth_cannot_exceed_non_repeating_pool():
         config.validate()
     with pytest.raises(ValueError, match="non-repeating prompt pool"):
         prompt_sequence(1, "session", len(PROMPT_POOL) + 1)
+
+
+def test_research_defaults_to_expanded_generation_token_limit():
+    """Give full studies the same substantial default output capacity as previews."""
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,))
+    # The value is persisted in run configuration, making resumed behavior reproducible.
+    assert config.max_tokens == DEFAULT_MAX_TOKENS == 8192
+    # Validation confirms the shared default is a supported positive integer limit.
+    config.validate()
 
 
 @pytest.mark.parametrize("depths", [(-1, 1), (0, 1), (1, 2.5, 3), (True, 2)])

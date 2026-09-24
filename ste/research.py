@@ -11,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
-from ste.models.openrouter import chat_text
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, chat_text
 from ste.protocol import (
     ALLOWED_MODELS,
     DEFAULT_RESEARCH_DEPTHS,
@@ -42,7 +42,7 @@ class ResearchConfig:
     provider_timeout: float = 120.0
     judge_model: str | None = None
     judge_timeout: float = 120.0
-    max_tokens: int = 600
+    max_tokens: int = DEFAULT_MAX_TOKENS
 
     def validate(self) -> None:
         """Reject unsafe, unsupported, or internally inconsistent configuration."""
@@ -68,6 +68,9 @@ class ResearchConfig:
             raise ValueError("The judge model must be supported.")
         if self.budget_usd <= 0 or self.provider_timeout <= 0 or self.judge_timeout <= 0:
             raise ValueError("Budgets and timeouts must be positive.")
+        if type(self.max_tokens) is not int or self.max_tokens <= 0:
+            # A stable positive allowance is resume-critical and bounds every generation.
+            raise ValueError("The generation token limit must be a positive integer.")
         if self.workload()["total_calls"] > MAX_RESEARCH_CALLS:
             raise ValueError("The research workload exceeds the safety limit.")
 
@@ -249,7 +252,9 @@ def run_research(
                                 config.judge_model,
                                 [{"role": "user", "content": judge_prompt}],
                                 timeout=config.judge_timeout,
-                                max_tokens=40,
+                                # JSON judging needs less output, but 256 tokens avoids
+                                # truncating valid provider wrappers before their stop.
+                                max_tokens=256,
                             )
                             judge_value = parse_judge_score(raw)
                             judge_unit = {

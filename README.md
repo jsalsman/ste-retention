@@ -138,13 +138,14 @@ Start the development server.
 
 Open the root page and enter an OpenRouter key. Select a model and an experiment type.
 
-For a single interaction, the server validates both the returned message text and
-the provider's finish reason. A token-limit finish returns the available text as
-plain text and labels it incomplete, so the browser warns that the displayed text
-may be truncated. Malformed provider metadata and provider failures produce a
-sanitized error without returning credentials or the provider response body.
-Preview and research runners likewise unwrap validated completions to plain text;
-they checkpoint safe partial text when a token limit ends a generation.
+For every interaction, the server validates both the returned message text and
+the provider's finish reason. Each generation allows 8,192 output tokens per call.
+After a token-limit finish, it makes as many as three bounded suffix requests and
+combines their validated text. Success requires an explicit provider `stop`; if
+that does not occur, “Try one prompt” labels the combined text incomplete, and
+preview and research runners do not score or checkpoint it as completed work.
+Malformed provider metadata and provider failures produce a sanitized error
+without returning credentials or the provider response body.
 
 The model menu currently offers Gemini 3.8 Flash, GPT-6 Sol, Claude Sonnet 5, and
 Llama 4 Maverick. These exact OpenRouter model identifiers were verified against
@@ -152,8 +153,8 @@ the provider catalog on 2026-09-24. Exact identifiers make a study more
 reproducible than moving `latest` aliases, but the catalog can change. Verify
 availability before you start a large study.
 
-* **Short preview:** This mode uses all four variants. It makes a maximum of 12 generation calls.
-* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 generation calls.
+* **Short preview:** This mode uses all four variants. It has at most 12 logical generations; token-limit continuations can add up to three calls per generation.
+* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 logical generations, plus any bounded continuation calls.
 
 “Try one prompt” and experiments are separate workflows. The free-form prompt is
 sent only to `/api/interact` for a single response. Short previews and full research

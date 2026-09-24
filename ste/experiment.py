@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from hashlib import sha256
 
-from ste.models.openrouter import chat_text
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, chat_text
 from ste.protocol import (
     ALLOWED_MODELS,
     PREVIEW_DEADLINE_SECONDS,
@@ -120,7 +120,13 @@ def run_experiment(
                 ]
                 # Leave room for scoring, checkpoint I/O, streaming, and deployment overhead.
                 timeout = min(UPSTREAM_TIMEOUT_SECONDS, remaining)
-                reply = request(api_key, model, messages, timeout=timeout, max_tokens=300)
+                reply = request(
+                    api_key,
+                    model,
+                    messages,
+                    timeout=timeout,
+                    max_tokens=DEFAULT_MAX_TOKENS,
+                )
                 # Context is retained within an arm, matching the retention design.
                 history.extend(
                     ({"role": "user", "content": prompt}, {"role": "assistant", "content": reply})

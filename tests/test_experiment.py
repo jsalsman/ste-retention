@@ -1,6 +1,7 @@
 """Transport-independent checks for resumable experiment orchestration."""
 
 from ste.experiment import INTERACTIVE_DEADLINE_SECONDS, MAX_WORK_UNITS, run_experiment
+from ste.models.openrouter import DEFAULT_MAX_TOKENS
 
 
 def test_resume_skips_saved_unit_and_rebuilds_context():
@@ -62,3 +63,21 @@ def test_maximum_run_has_a_request_timeout_below_the_overall_deadline():
     assert events[-1]["type"] == "success"
     assert len(timeouts) == MAX_WORK_UNITS
     assert sum(timeouts) < INTERACTIVE_DEADLINE_SECONDS
+
+
+def test_preview_uses_expanded_generation_token_limit():
+    """Apply the shared substantial output allowance to every preview generation."""
+    token_limits = []
+
+    def request(_key, _model, _messages, **options):
+        """Capture configured output limits without making an external paid request."""
+        # The response is complete test text suitable for local deterministic scoring.
+        token_limits.append(options["max_tokens"])
+        # A short answer keeps this test focused on request configuration.
+        return "Use a short active sentence."
+
+    events = list(run_experiment("secret", "openai/gpt-6-sol", 1, 1, request=request))
+
+    # Each of the four variants must receive the same shared expanded allowance.
+    assert events[-1]["type"] == "success"
+    assert token_limits == [DEFAULT_MAX_TOKENS] * 4
