@@ -9,6 +9,7 @@ from flask import Flask, Response, jsonify, request, send_file, stream_with_cont
 
 from ste.experiment import ALLOWED_MODELS, UPSTREAM_TIMEOUT_SECONDS, run_experiment, validate_run
 from ste.leaderboard import render_file, render_leaderboard
+from ste.models.catalog import catalog_payload
 from ste.models.openrouter import (
     DEFAULT_MAX_TOKENS,
     MAX_CONTINUATIONS,
@@ -69,6 +70,20 @@ def index():
 def health():
     """Report process health without contacting paid or external services."""
     return jsonify(status="ok")
+
+
+@app.get("/api/models")
+def models():
+    """Serve the public model catalog that builds the browser menu and cost range.
+
+    The catalog module is the only list of identifiers, labels, and prices, so the
+    standalone page fetches it here instead of duplicating it in markup or script.
+    """
+    # Only public catalog facts are returned; no credential is ever involved.
+    response = jsonify(catalog_payload())
+    # A short cache lifetime keeps repricing visible soon after a deployment.
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
 
 
 @app.get("/leaderboard")

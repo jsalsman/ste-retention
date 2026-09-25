@@ -19,46 +19,152 @@
   const VARIANT_COUNT = 4;
   const RESEARCH_TURNS = 12;
   const REQUESTS_PER_UNIT = 4;
-  // Per-token OpenRouter prices were verified from the live catalog on 2026-09-25.
-  // Estimates use these exact-model input/output rates and never fetch with credentials.
-  const MODEL_PRICES = Object.freeze({
-    "google/gemini-3.8-flash": {input: 0.00000075, output: 0.00000375},
-    "openai/gpt-5.6-luna": {input: 0.0000002, output: 0.0000012},
-    "anthropic/claude-haiku-4.5": {input: 0.000001, output: 0.000005},
-    "meta-llama/llama-4-maverick": {input: 0.0000001875, output: 0.0000006525},
-  });
-  // These normalized spend factors come from completed 288-unit studies: Llama
-  // cost $0.08 and Gemini cost $2.10. Multiplying by a model's summed base rates
-  // preserves model-price sensitivity without using the former worst-case ceiling.
-  const REFERENCE_LOGICAL_UNITS = 288;
-  const OBSERVED_COST_FACTORS = Object.freeze({
-    low: 0.08 / REFERENCE_LOGICAL_UNITS /
-      (MODEL_PRICES["meta-llama/llama-4-maverick"].input + MODEL_PRICES["meta-llama/llama-4-maverick"].output),
-    high: 2.10 / REFERENCE_LOGICAL_UNITS /
-      (MODEL_PRICES["google/gemini-3.8-flash"].input + MODEL_PRICES["google/gemini-3.8-flash"].output),
-  });
+  // The server's model catalog is the only source of identifiers, labels, prices,
+  // and cost anchors. It stays null until a validated `/api/models` response arrives,
+  // and cost copy stays neutral while it is missing.
+  let catalog = null;
   let controller = null;
+
+  /** Format a validated dollar amount for approximate, non-binding disclosure copy. */
+  function dollars(value) {
+    // Up to four decimals keep very small paid-model estimates distinguishable from zero.
+    const currency = {style:"currency", currency:"USD", minimumFractionDigits:2, maximumFractionDigits:4};
+    return value.toLocaleString("en-US", currency);
+  }
 
   /** Render an empirically calibrated planning estimate for the selected workload.
    *
    * The range scales two completed-study observations by logical work and by the
    * selected model's combined base-token price. It remains approximate because
    * model output length, input/output mix, continuations, and routing can differ.
+   * Free catalog variants receive rate-limit guidance instead of a dollar range.
    */
   function showCostEstimate(logicalUnits) {
     const estimate = document.querySelector("#cost-estimate");
-    const price = MODEL_PRICES[model.value];
+    const price = catalog?.prices.get(model.value);
     if (!price || !Number.isFinite(logicalUnits)) {
       // Never retain a stale dollar range for an invalid model or workload.
       estimate.textContent = "Enter valid settings to calculate a rough cost range.";
       return;
     }
+    const verified = `Prices were checked against OpenRouter on ${catalog.verifiedOn} and can change.`;
+    if (price.free) {
+      // Zero listed prices still carry provider limits that can interrupt long studies.
+      estimate.textContent = `Rough cost estimate: $0.00. This free variant lists no token charges, but OpenRouter rate limits free models, so a long study can stop early; resume it with the run ID. ${verified} Set an OpenRouter spending limit in case pricing or routing changes.`;
+      return;
+    }
+    const {low, high, logicalUnits:referenceUnits} = catalog.calibration;
     const blendedPrice = price.input + price.output;
-    const low = logicalUnits * blendedPrice * OBSERVED_COST_FACTORS.low;
-    const high = logicalUnits * blendedPrice * OBSERVED_COST_FACTORS.high;
+    // Each anchor is normalized by its reference model's price, then rescaled here.
+    const lowCost = logicalUnits * blendedPrice * low.factor;
+    const highCost = logicalUnits * blendedPrice * high.factor;
     // Currency formatting is approximate and does not imply a provider-side cap.
-    const currency = {style:"currency", currency:"USD", minimumFractionDigits:2, maximumFractionDigits:4};
-    estimate.textContent = `Rough cost range: ${low.toLocaleString("en-US", currency)}–${high.toLocaleString("en-US", currency)}. Calibrated from completed 288-unit studies that cost $0.08 with Llama 4 Maverick and $2.10 with Gemini 3.8 Flash, then scaled by selected workload and base token prices. Actual input/output mix, continuations, and routing vary; set an OpenRouter spending limit.`;
+    estimate.textContent = `Rough cost range: ${dollars(lowCost)}–${dollars(highCost)}. Calibrated from completed ${referenceUnits}-unit studies that cost ${dollars(low.usd)} with ${low.label} and ${dollars(high.usd)} with ${high.label}, then scaled by selected workload and base token prices. ${verified} Actual input/output mix, continuations, and routing vary; set an OpenRouter spending limit.`;
+  }
+
+  /** Validate an untrusted `/api/models` payload into price and calibration lookups.
+   *
+   * Every identifier, label, price, and anchor is checked before it can reach the
+   * menu or an arithmetic expression. Any malformed entry rejects the whole
+   * catalog, so the page never shows a partial menu or a misleading estimate.
+   */
+  function parseCatalog(data) {
+    const text = (value) => typeof value === "string" && value.trim() !== "" && value.length <= 200;
+    const rate = (value) => Number.isFinite(value) && value >= 0 && value < 1;
+    if (!Array.isArray(data?.models) || !data.models.length || !text(data.verified_on)) return null;
+    const models = [];
+    const prices = new Map();
+    for (const entry of data.models) {
+      // Reject duplicates and non-numeric or negative prices instead of guessing.
+      if (!text(entry?.id) || !text(entry.label) || !rate(entry.input) || !rate(entry.output) ||
+          typeof entry.free !== "boolean" || prices.has(entry.id)) return null;
+      models.push({id:entry.id, label:entry.label, free:entry.free, input:entry.input, output:entry.output});
+      prices.set(entry.id, {input:entry.input, output:entry.output, free:entry.free});
+    }
+    const units = data.calibration?.logical_units;
+    if (!Number.isInteger(units) || units < 1) return null;
+    const calibration = {logicalUnits:units};
+    for (const bound of ["low", "high"]) {
+      const anchor = data.calibration[bound];
+      const reference = prices.get(anchor?.model);
+      // Anchors must name a priced catalog model so normalization cannot divide by zero.
+      if (!reference || !text(anchor.label) || !Number.isFinite(anchor.usd) || anchor.usd <= 0 ||
+          reference.input + reference.output <= 0) return null;
+      const factor = anchor.usd / units / (reference.input + reference.output);
+      calibration[bound] = {label:anchor.label, usd:anchor.usd, factor};
+    }
+    return {models, prices, calibration, verifiedOn:data.verified_on};
+  }
+
+  /** Describe one catalog model with its exact identifier and per-million-token prices.
+   *
+   * The menu is wide enough for this detail, which lets users confirm the exact
+   * upstream identifier and price without leaving the page. Free variants say so
+   * instead of listing zero rates, because their label already marks them free.
+   */
+  function optionText(entry) {
+    if (entry.free) return `${entry.label} — ${entry.id}`;
+    // Per-million-token rates match OpenRouter's catalog display and avoid tiny decimals.
+    const perMillion = (rate) => dollars(rate * 1e6);
+    return `${entry.label} — ${entry.id} — ${perMillion(entry.input)} in / ${perMillion(entry.output)} out per 1M tokens`;
+  }
+
+  /** Fetch the server catalog, then build grouped model options without HTML parsing.
+   *
+   * Options use `textContent` so catalog labels stay inert. The first catalog entry
+   * remains the default selection. A failure leaves an empty, invalid selection
+   * with an announced reload instruction rather than a stale hard-coded menu.
+   */
+  async function loadModels() {
+    const status = document.querySelector("#model-status");
+    try {
+      const response = await fetch("/api/models", {headers:{"Accept":"application/json"}});
+      if (!response.ok) throw new Error("Model catalog lookup failed.");
+      catalog = parseCatalog(await response.json());
+      if (!catalog) throw new Error("Model catalog is malformed.");
+      // Separate paid and free variants so rate-limited choices are easy to recognize.
+      const groups = [["Paid models", false], ["Free models (rate limited)", true]];
+      const fragment = document.createDocumentFragment();
+      for (const [label, free] of groups) {
+        const members = catalog.models.filter((entry) => entry.free === free);
+        if (!members.length) continue;
+        const group = document.createElement("optgroup");
+        group.label = label;
+        for (const entry of members) {
+          const option = document.createElement("option");
+          option.value = entry.id;
+          option.textContent = optionText(entry);
+          group.append(option);
+        }
+        fragment.append(group);
+      }
+      model.replaceChildren(fragment);
+      // Select the catalog's first entry, even when grouping reorders the menu.
+      model.value = catalog.models[0].id;
+      status.textContent = "";
+    } catch (_error) {
+      // An empty value keeps both server validation and the cost estimate neutral.
+      catalog = null;
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "Models unavailable";
+      model.replaceChildren(option);
+      status.textContent = "The model list could not be loaded. Reload the page to try again.";
+    }
+    // Refresh workload and cost copy for the newly available (or missing) selection.
+    showWorkload();
+  }
+
+  /** Read the selected catalog model, reporting an empty selection natively. */
+  function selectedModel() {
+    if (!model.value) {
+      // Native validity connects the message to the model menu.
+      model.setCustomValidity("Select a model.");
+      model.reportValidity();
+      throw new Error("A model is required.");
+    }
+    model.setCustomValidity("");
+    return model.value;
   }
 
   /** Recalculate the visible workload from the currently selected form values.
@@ -148,7 +254,7 @@
     status.textContent = "Contacting the model…";
     try {
       const response = await fetch("/api/interact", {method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({api_key:credential(), model:model.value, prompt:document.querySelector("#prompt").value})});
+        body:JSON.stringify({api_key:credential(), model:selectedModel(), prompt:document.querySelector("#prompt").value})});
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "The request failed.");
       // textContent makes model-generated markup inert.
@@ -246,7 +352,7 @@
     try {
       const resume = document.querySelector("#resume-run-id").value.trim();
       // The run ID is safe metadata; the credential remains confined to this request body.
-      const body = {api_key:credential(), run_mode:submittedMode, model:model.value, resume_run_id:resume || null};
+      const body = {api_key:credential(), run_mode:submittedMode, model:selectedModel(), resume_run_id:resume || null};
       // Each mode sends only the settings that define that saved run.
       if (submittedMode === "research") body.sessions = Number(document.querySelector("#sessions").value);
       else {
@@ -296,4 +402,6 @@
   cancel.addEventListener("click", () => controller?.abort());
   checkRun.addEventListener("click", checkRunStatus);
   showMode();
+  // The menu arrives asynchronously; showMode() already rendered neutral cost copy.
+  loadModels();
 })();

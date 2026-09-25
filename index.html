@@ -23,12 +23,10 @@
       <input id="api-key" type="password" autocomplete="off" spellcheck="false" required>
       <p class="help">Your key is sent only in the HTTPS request body, retained only during that request, and never stored, logged, displayed, or written to results.</p>
       <label for="model">Model</label>
-      <select id="model">
-        <option value="google/gemini-3.8-flash">Gemini 3.8 Flash</option>
-        <option value="openai/gpt-5.6-luna">GPT-5.6 Luna</option>
-        <option value="anthropic/claude-haiku-4.5">Claude Haiku 4.5</option>
-        <option value="meta-llama/llama-4-maverick">Llama 4 Maverick</option>
+      <select id="model" required aria-describedby="model-status">
+        <option value="">Loading models…</option>
       </select>
+      <p id="model-status" class="help" role="status" aria-live="polite"></p>
     </section>
 
     <section class="grid">
