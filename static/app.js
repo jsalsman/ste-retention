@@ -139,6 +139,18 @@
     return {models, prices, calibration, verifiedOn:data.verified_on};
   }
 
+  /** Format a validated per-token price as dollars per million tokens.
+   *
+   * @param {number} rate Finite, non-negative per-token US-dollar price.
+   * @returns {string} Currency text such as "$0.75" for $0.00000075 per token.
+   */
+  function perMillion(rate) {
+    // Per-million-token rates match OpenRouter's catalog display and avoid tiny decimals.
+    const scaled = rate * 1e6;
+    // Reuse the shared currency formatter so menu and estimate precision agree.
+    return dollars(scaled);
+  }
+
   /** Describe one catalog model with its exact identifier and per-million-token prices.
    *
    * The menu is wide enough for this detail, which lets users confirm the exact
@@ -152,8 +164,7 @@
   function optionText(entry) {
     // Free labels already say "(free)", so zero rates would only add noise.
     if (entry.free) return `${entry.label} — ${entry.id}`;
-    // Per-million-token rates match OpenRouter's catalog display and avoid tiny decimals.
-    const perMillion = (rate) => dollars(rate * 1e6);
+    // Paid options show both directions because input and output rates differ.
     return `${entry.label} — ${entry.id} — ${perMillion(entry.input)} in / ${perMillion(entry.output)} out per 1M tokens`;
   }
 
@@ -178,8 +189,10 @@
       const groups = [["Paid models", false], ["Free models (rate limited)", true]];
       const fragment = document.createDocumentFragment();
       for (const [label, free] of groups) {
+        // Collect this group's models while preserving catalog order.
+        const members = [];
+        for (const entry of catalog.models) if (entry.free === free) members.push(entry);
         // Omit a group entirely when the catalog has no models of that kind.
-        const members = catalog.models.filter((entry) => entry.free === free);
         if (!members.length) continue;
         const group = document.createElement("optgroup");
         group.label = label;
