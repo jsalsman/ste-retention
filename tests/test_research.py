@@ -19,6 +19,7 @@ from ste.research import (
     ResearchConfig,
     load_state,
     new_state,
+    parse_state,
     prompt_sequence,
     run_research,
     save_state,
@@ -117,6 +118,16 @@ def test_failed_attempts_remain_bounded_across_resumes():
         list(run_research("secret", config, state, lambda _value: None, request=incomplete_request))
     assert state["paid_request_attempts"] == maximum
     assert persisted[-1]["paid_request_attempts"] == maximum
+
+
+def test_legacy_research_reserves_unknown_paid_attempts():
+    """Prevent a pre-accounting research snapshot from resetting paid spend to zero."""
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,))
+    state = new_state(config, "f" * 32)
+    state.pop("paid_request_attempts")
+    # Parsing remains compatible for inspection but consumes every uncertain attempt.
+    restored = parse_state(json.dumps(state), config, state["run_id"])
+    assert restored["paid_request_attempts"] == config.workload()["maximum_provider_requests"]
 
 
 @pytest.mark.parametrize("depths", [(-1, 1), (0, 1), (1, 2.5, 3), (True, 2)])

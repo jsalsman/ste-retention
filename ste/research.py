@@ -180,8 +180,12 @@ def parse_state(contents: str | bytes, config: ResearchConfig, run_id: str) -> d
         {unit.get("unit_id") for unit in units if isinstance(unit, dict)}
     ) != len(units):
         raise ValueError("The research snapshot contains duplicate or malformed units.")
-    paid_attempts = state.setdefault("paid_request_attempts", 0)
     maximum_attempts = config.workload()["maximum_provider_requests"]
+    if "paid_request_attempts" not in state:
+        # Pre-accounting snapshots may hide failed sends, so conservatively consume
+        # their allowance instead of granting a fresh paid budget during resume.
+        state["paid_request_attempts"] = maximum_attempts
+    paid_attempts = state["paid_request_attempts"]
     if type(paid_attempts) is not int or not 0 <= paid_attempts <= maximum_attempts:
         # Never resume state that can bypass or has already exceeded its paid ceiling.
         raise ValueError("The research snapshot has invalid paid-request accounting.")

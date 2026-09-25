@@ -12,7 +12,7 @@ from ste.models.openrouter import ChatCompletion, IncompleteGenerationError
 from ste.protocol import ALLOWED_MODELS
 from ste.research import MAX_WEB_RESEARCH_SESSIONS
 from ste.runs.backend import GCSMount, StorageBackend
-from ste.runs.store import SnapshotFencer
+from ste.runs.store import SnapshotFencer, create_run, parse_run
 from tests.fake_gcs import FakeBucket
 
 ROOT = Path(__file__).parents[1]
@@ -468,6 +468,15 @@ def test_workload_limits(client):
     )
     assert response.status_code == 400
     assert response.content_type == "application/json"
+
+
+def test_legacy_preview_reserves_unknown_paid_attempts():
+    """Prevent a pre-accounting preview snapshot from receiving a fresh paid budget."""
+    state = create_run("openai/gpt-6-sol", 1, 1, seed=7)
+    state.pop("paid_request_attempts")
+    # Missing historical failure data requires the conservative full allowance.
+    restored = parse_run(json.dumps(state), state["run_id"])
+    assert restored["paid_request_attempts"] == 16
 
 
 def test_workload_help_discloses_logical_units_and_maximum_paid_requests(client):

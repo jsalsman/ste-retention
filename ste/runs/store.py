@@ -114,7 +114,11 @@ def parse_run(contents: str | bytes, run_id: str) -> dict:
     if type(state["batches"]) is not int or type(state["turns"]) is not int:
         raise RunStoreError("The saved experiment run has invalid settings.")
     maximum_attempts = state["batches"] * state["turns"] * len(VARIANTS) * (MAX_CONTINUATIONS + 1)
-    paid_attempts = state.setdefault("paid_request_attempts", 0)
+    if "paid_request_attempts" not in state:
+        # Historical snapshots cannot prove how many failed sends occurred. Reserve
+        # their full allowance so resumption cannot silently reset paid accounting.
+        state["paid_request_attempts"] = maximum_attempts
+    paid_attempts = state["paid_request_attempts"]
     if type(paid_attempts) is not int or not 0 <= paid_attempts <= maximum_attempts:
         # Resumed previews must not reset or exceed their disclosed provider requests.
         raise RunStoreError("The saved experiment run has invalid paid-request accounting.")

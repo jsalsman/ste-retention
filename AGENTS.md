@@ -32,4 +32,5 @@
 - Recalculate browser workload disclosures whenever a workload-defining input changes; never leave default-session figures visible for a different submitted session count.
 - Keep browser input maxima within the server's worst-case paid-request ceiling, and treat above-maximum values as invalid when calculating disclosures.
 - Persist paid provider-attempt reservations before each request and enforce their confirmed ceiling across retries and resumes; incomplete logical units do not erase spent attempts.
+- Treat legacy snapshots without durable paid-attempt counters as having consumed their full allowance; unknown failed sends make a smaller migration value unsafe.
 - Label browser cost ranges as rough estimates, update them with every model or workload change, state their assumptions, and recommend a provider-side spending limit.
