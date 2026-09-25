@@ -18,5 +18,5 @@ button.secondary { background:#5d6872; } button:disabled { cursor:not-allowed; o
 .result { min-height:4rem; padding:1rem; white-space:pre-wrap; overflow-wrap:anywhere; background:#edf2f5; border-left:4px solid var(--accent); }
 .overlay { position:fixed; inset:0; z-index:10; display:grid; place-items:center; background:rgb(10 22 30 / 78%); }
 .overlay[hidden] { display:none; } .overlay-card { width:min(90%,420px); text-align:center; background:#fff; padding:2rem; border-radius:.7rem; }
-.overlay img { display:block; margin:auto; } table { width:100%; border-collapse:collapse; background:#fff; } th,td { padding:.7rem; border:1px solid var(--line); text-align:left; }
+.overlay img { display:block; margin:auto; } .table-scroll { max-width:100%; overflow-x:auto; } table { width:100%; min-width:70rem; border-collapse:collapse; background:#fff; } th,td { padding:.7rem; border:1px solid var(--line); text-align:left; }
 @media (prefers-reduced-motion:reduce) { .overlay img { visibility:hidden; } *,*::before,*::after { scroll-behavior:auto !important; animation:none !important; } }

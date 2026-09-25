@@ -124,6 +124,10 @@ def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch
     assert b"&lt;x&gt;" in response.data and b"<x>" not in response.data
     assert b"Rule effect" in response.data and b"+15.0" in response.data
     assert b"Naming effect" in response.data and b"+25.0" in response.data
+    # Visible copy defines uncertainty and discloses pairing and independence assumptions.
+    assert b"A 95% confidence interval (95% CI)" in response.data
+    assert b"Effects are calculated within each matched cell" in response.data
+    assert b"treats complete cells as independent" in response.data
 
 
 def test_success_copy_distinguishes_preview_from_published_research():

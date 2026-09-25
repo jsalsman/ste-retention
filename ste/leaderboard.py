@@ -5,6 +5,31 @@ import math
 import statistics
 
 from ste.records import read_records
+from ste.statistics import paired_t
+
+
+# These labels are explanatory rather than abbreviated statistical jargon. They are
+# rendered as a definition list so screen-reader and sighted users get the same context.
+METRIC_DEFINITIONS = (
+    ("Bare baseline", "Mean score for the bare prompt, before naming or rules are added."),
+    (
+        "Rule effect",
+        "Mean paired change from spelling out the rules, averaged with and without naming.",
+    ),
+    (
+        "Naming effect",
+        "Mean paired change from naming the technique, averaged with and without rules.",
+    ),
+    (
+        "Interaction",
+        "The extra paired change when naming and rules appear together, "
+        "beyond their separate effects.",
+    ),
+    (
+        "Paired observations",
+        "Complete four-arm research cells used to calculate every value in the row.",
+    ),
+)
 
 
 def _number(value: object) -> float:
@@ -16,6 +41,42 @@ def _number(value: object) -> float:
     if not math.isfinite(result) or not 0 <= result <= 100:
         raise ValueError("Leaderboard scores must be finite values from 0 to 100.")
     return result
+
+
+def _mean_interval(values: tuple[float, ...]) -> tuple[float, float | None, float | None]:
+    """Return a finite mean and two-sided 95% CI for complete-cell measurements.
+
+    The dependency-free paired-t helper supplies its documented normal-critical-value
+    half-width (1.96 standard errors). A single complete cell has a valid point estimate
+    but cannot supply a variance estimate, so both confidence limits are ``None``.
+    """
+    # Inputs are derived only from finite validated scores, but check every boundary so
+    # malformed intermediate values can never reach HTML formatting unnoticed.
+    if not values or not all(math.isfinite(value) for value in values):
+        raise ValueError("Leaderboard summaries require finite complete-cell values.")
+    mean = statistics.mean(values)
+    result = paired_t(list(values))
+    if result is None:
+        # One observation supports the displayed point, not an uncertainty interval.
+        return mean, None, None
+    half_width = result[-1]
+    lower, upper = mean - half_width, mean + half_width
+    if not all(math.isfinite(value) for value in (mean, lower, upper)):
+        # Confidence limits and estimates must remain safe for direct text rendering.
+        raise ValueError("Leaderboard confidence intervals must be finite.")
+    return mean, lower, upper
+
+
+def _estimate_cell(summary: tuple[float, float | None, float | None], *, signed: bool) -> str:
+    """Format one estimate and its associated interval as unambiguous table text."""
+    mean, lower, upper = summary
+    # Contrasts always show a sign; baseline scores retain their familiar score format.
+    format_spec = "+.1f" if signed else ".1f"
+    estimate = format(mean, format_spec)
+    if lower is None or upper is None:
+        # The visible unavailable label prevents a one-cell row implying zero uncertainty.
+        return f"{estimate} (95% CI unavailable; fewer than 2 observations)"
+    return f"{estimate} (95% CI {format(lower, format_spec)} to {format(upper, format_spec)})"
 
 
 def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
@@ -84,12 +145,16 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         safe_model = html.escape(model, quote=True)
         safe_protocol = html.escape(str(protocol), quote=True)
         safe_scoring = html.escape(str(scoring), quote=True)
-        means = [statistics.mean(values) for values in zip(*contrasts, strict=True)]
+        # Summarize already paired cell-level values rather than four independent arms.
+        summaries = [_mean_interval(values) for values in zip(*contrasts, strict=True)]
+        cells = [
+            _estimate_cell(summary, signed=index > 0) for index, summary in enumerate(summaries)
+        ]
         rows.append(
             f'<tr data-model="{safe_model}"><th scope="row">{safe_model}</th>'
             f"<td>{safe_protocol}</td><td>{safe_scoring}</td>"
-            f"<td>{means[0]:.1f}</td><td>{means[1]:+.1f}</td>"
-            f"<td>{means[2]:+.1f}</td><td>{means[3]:+.1f}</td>"
+            f"<td>{cells[0]}</td><td>{cells[1]}</td>"
+            f"<td>{cells[2]}</td><td>{cells[3]}</td>"
             f"<td>{len(contrasts)}</td></tr>"
         )
     label = "Synthetic preview — not experimental data" if synthetic else "Experiment results"
@@ -99,13 +164,42 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{html.escape(label)}</title>"
         '<link rel="stylesheet" href="/static/styles.css"></head>'
-        f'<body><main><p><a href="/">Back to experiment</a></p><h1>{html.escape(label)}</h1>{empty}'
-        "<table><caption>Paired deterministic compliance-score contrasts.</caption>"
+        f'<body><main><p><a href="/">Back to experiment</a></p><h1>{html.escape(label)}</h1>'
+        '<section aria-labelledby="about-results"><h2 id="about-results">About the experiment</h2>'
+        "<p>The four variants are <strong>bare</strong> (prompt alone), <strong>rules</strong> "
+        "(rules spelled out), <strong>named</strong> (technique named), and "
+        "<strong>named_rules</strong> (name and rules together). Compliance scores run from "
+        "0 to 100; higher scores mean greater compliance. Effects are paired changes in "
+        "score points.</p>"
+        "<dl>"
+        + "".join(
+            f"<dt>{term}</dt><dd>{description}</dd>" for term, description in METRIC_DEFINITIONS
+        )
+        + "</dl><p>A negative interaction may reflect overlap between naming the technique and "
+        "spelling out its rules, but the interaction does not identify its cause.</p></section>"
+        '<section aria-labelledby="uncertainty"><h2 id="uncertainty">Understanding uncertainty</h2>'
+        "<p>A 95% confidence interval (95% CI) is the estimate plus or minus 1.96 standard errors "
+        "across contributing complete cells. Wider intervals indicate greater uncertainty. It is "
+        "neither the range of individual scores nor a 95% probability that the fixed population "
+        "effect lies inside this observed interval. Interpret estimates and uncertainty together, "
+        "rather than reducing them to statistically significant or not significant.</p>"
+        "<p>Only complete four-arm research cells matched within run, model, session, depth, "
+        "protocol version, and scoring version are included; previews and incomplete runs are "
+        "excluded. Effects are calculated within each matched cell before their means and "
+        "intervals. "
+        "The interval treats complete cells as independent, not as a clustered or hierarchical "
+        "analysis; pooling across sessions, depths, or runs may reflect variation at more than "
+        "one level.</p>"
+        f'</section>{empty}<div class="table-scroll" tabindex="0" '
+        'aria-label="Scrollable experiment results table"><table>'
+        "<caption>Mean compliance scores and paired score-point effects with two-sided 95% "
+        "confidence intervals.</caption>"
         "<thead><tr><th>Model</th><th>Protocol version</th><th>Scoring version</th>"
-        "<th>Bare baseline</th><th>Rule effect</th>"
-        "<th>Naming effect</th><th>Interaction</th><th>Paired observations</th></tr></thead>"
+        "<th>Bare baseline, mean and 95% CI</th><th>Rule effect, mean and 95% CI</th>"
+        "<th>Naming effect, mean and 95% CI</th><th>Interaction, mean and 95% CI</th>"
+        "<th>Paired observations</th></tr></thead>"
         f"<tbody>{''.join(rows)}"
-        "</tbody></table></main></body></html>"
+        "</tbody></table></div></main></body></html>"
     )
 
 
