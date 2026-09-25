@@ -474,10 +474,11 @@ def test_workload_help_discloses_logical_units_and_maximum_paid_requests(client)
     response = client.get("/")
     script = client.get("/static/app.js")
     # Static markup covers the initial preview and default full-study workload.
-    assert b"12 logical generations" in response.data
-    assert b"48 paid provider requests" in response.data
-    assert b"288 logical generations" in response.data
-    assert b"1,152 paid provider requests" in response.data
+    assert b"4 logical generations" in response.data
+    assert b"16 paid provider requests" in response.data
+    assert b"Each session uses 48 logical generations" in response.data
+    assert b"192 paid provider requests" in response.data
     # Dynamic mode switching must retain the same worst-case paid disclosures.
-    assert b"48 paid provider requests" in script.data
-    assert b"1,152 paid provider requests" in script.data
+    assert b"logicalUnits = primary * turns * VARIANT_COUNT" in script.data
+    assert b"maximumRequests = logicalUnits * REQUESTS_PER_UNIT" in script.data
+    assert b'input.addEventListener("input", showWorkload)' in script.data

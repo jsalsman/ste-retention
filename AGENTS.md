@@ -29,3 +29,4 @@
 - Verify selectable models against OpenRouter's live catalog, and prefer exact model identifiers over moving aliases so experiment records remain reproducible.
 - Treat only an explicit OpenRouter `stop` as a complete text generation. Bounded continuation text may be shown diagnostically, but experiments must not score or checkpoint it until a stop is received.
 - Distinguish checkpointed logical work units from paid provider requests in every workload display. Apply safety ceilings to the worst-case request count, including all bounded continuation attempts.
+- Recalculate browser workload disclosures whenever a workload-defining input changes; never leave default-session figures visible for a different submitted session count.

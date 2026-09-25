@@ -13,7 +13,40 @@
   const cancel = document.querySelector("#cancel");
   const checkRun = document.querySelector("#check-run");
   const start = runForm.querySelector("button[type='submit']");
+  const sessions = document.querySelector("#sessions");
+  // Workload factors mirror the four server variants, deepest research turn,
+  // and one initial provider request plus three bounded continuations per unit.
+  const VARIANT_COUNT = 4;
+  const RESEARCH_TURNS = 12;
+  const REQUESTS_PER_UNIT = 4;
   let controller = null;
+
+  /** Recalculate the visible workload from the currently selected form values.
+   *
+   * Research counts use every turn through the deepest probe because intermediate
+   * turns build context. Preview counts use selected batches and turns. Invalid
+   * in-progress input receives a neutral prompt until native validation can run.
+   */
+  function showWorkload() {
+    const help = document.querySelector("#mode-help");
+    const research = runMode.value === "research";
+    // Read only the active mode's numeric controls so hidden values cannot confuse copy.
+    const primary = research ? Number(sessions.value) : Number(document.querySelector("#batches").value);
+    const turns = research ? RESEARCH_TURNS : Number(document.querySelector("#turns").value);
+    if (!Number.isInteger(primary) || primary < 1 || !Number.isInteger(turns) || turns < 1) {
+      // Do not advertise a stale workload while the user edits a numeric field.
+      help.textContent = "Enter valid experiment settings to calculate the maximum paid workload.";
+      return;
+    }
+    const logicalUnits = primary * turns * VARIANT_COUNT;
+    const maximumRequests = logicalUnits * REQUESTS_PER_UNIT;
+    // Locale formatting makes large selected workloads legible without changing values.
+    const logicalText = logicalUnits.toLocaleString("en-US");
+    const requestText = maximumRequests.toLocaleString("en-US");
+    help.textContent = research
+      ? `The full protocol is resumable and can take longer than the web request limit. ${primary.toLocaleString("en-US")} selected sessions use ${logicalText} logical generations and at most ${requestText} paid provider requests. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”`
+      : `The preview uses all four variants, ${logicalText} logical generations, and at most ${requestText} paid provider requests. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”`;
+  }
 
   /** Show only the controls that apply to the selected experiment protocol. */
   function showMode() {
@@ -25,10 +58,8 @@
     researchOptions.hidden = !research;
     for (const input of previewOptions.querySelectorAll("input")) input.disabled = research;
     for (const input of researchOptions.querySelectorAll("input")) input.disabled = !research;
-    // Distinguish durable units from the worst-case paid continuation requests.
-    document.querySelector("#mode-help").textContent = research
-      ? "The full protocol is resumable and can take longer than the web request limit. Six default sessions use 288 logical generations and at most 1,152 paid provider requests. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”"
-      : "The preview uses all four variants, at most 12 logical generations, and at most 48 paid provider requests. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”";
+    // Refresh paid-work disclosure whenever a mode change activates different inputs.
+    showWorkload();
   }
 
   /** Read and validate the shared credential without copying it into browser storage. */
@@ -176,6 +207,10 @@
   chatForm.addEventListener("submit", askModel);
   runForm.addEventListener("submit", startExperiment);
   runMode.addEventListener("change", showMode);
+  // Every workload-defining input updates the disclosure before paid work can start.
+  for (const input of runForm.querySelectorAll("#sessions, #batches, #turns")) {
+    input.addEventListener("input", showWorkload);
+  }
   cancel.addEventListener("click", () => controller?.abort());
   checkRun.addEventListener("click", checkRunStatus);
   showMode();

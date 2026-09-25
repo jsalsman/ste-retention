@@ -195,7 +195,7 @@ Before a run, calculate both logical units and the maximum provider-request coun
 
 The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
-The web form shows both the default logical-generation count and maximum paid provider-request count before a full run. It does not show a currency estimate. The user who enters the OpenRouter key accepts the provider charges.
+The web form recalculates both the logical-generation count and maximum paid provider-request count when the user changes preview turns, batches, or research sessions. It does not show a currency estimate. The user who enters the OpenRouter key accepts the provider charges.
 
 ## The files
 
