@@ -149,9 +149,9 @@ preview and research runners do not score or checkpoint it as completed work.
 Malformed provider metadata and provider failures produce a sanitized error
 without returning credentials or the provider response body.
 
-The model menu currently offers Gemini 3.8 Flash, GPT-6 Sol, Claude Sonnet 5, and
+The model menu currently offers Gemini 3.8 Flash, GPT-5.6 Luna, Claude Haiku 4.5, and
 Llama 4 Maverick. These exact OpenRouter model identifiers were verified against
-the provider catalog on 2026-09-24. Exact identifiers make a study more
+the provider catalog on 2026-09-25. Exact identifiers make a study more
 reproducible than moving `latest` aliases, but the catalog can change. Verify
 availability before you start a large study.
 
@@ -195,11 +195,11 @@ This command runs two models and uses the optional word list and judge:
 
 ```sh
 python -m ste.research \
-  --models google/gemini-3.8-flash openai/gpt-6-sol \
+  --models google/gemini-3.8-flash openai/gpt-5.6-luna \
   --sessions 6 --depths 1 6 12 --seed 20260916 \
   --budget-usd 40 --provider-timeout 120 \
   --approved-words /secure/approved_words.txt \
-  --judge-model anthropic/claude-sonnet-5 --judge-timeout 120 \
+  --judge-model anthropic/claude-haiku-4.5 --judge-timeout 120 \
   --state /durable/research/RUN.json --yes
 ```
 
@@ -217,7 +217,7 @@ Before a run, calculate both logical units and the maximum provider-request coun
 
 The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
-The web form recalculates the logical-generation count, maximum paid provider-request count, and a rough model-specific cost range when the user changes the model, preview turns, batches, or research sessions. Prices were verified against OpenRouter's live catalog on 2026-09-25. The low range assumes one request with 500 input and 300 output tokens per logical unit; the high range assumes four requests with 8,000 input and 8,192 output tokens each. This deliberately broad range is not a quote or spending cap. Because one web session can make at most 192 provider requests, the form caps research at 5,208 sessions so the worst case stays below the 1,000,000-request server safety ceiling. The user who enters the OpenRouter key accepts the provider charges and should set a provider-side spending limit.
+The web form recalculates the logical-generation count, maximum paid provider-request count, and a rough model-specific cost range when the user changes the model, preview turns, batches, or research sessions. Prices were verified against OpenRouter's live catalog on 2026-09-25. The narrower range is calibrated from completed 288-logical-unit studies that cost $0.08 with Llama 4 Maverick and $2.10 with Gemini 3.8 Flash. It normalizes those observations by each reference model's combined base input/output price, then scales them by the selected model's combined base price and the selected logical workload. This is an empirical planning range, not a quote or spending cap: input/output mix, response length, continuations, and routing can differ. The application caps research at 100 sessions and 20,000 worst-case paid provider requests; the web study reaches 19,200 requests at that session maximum. The user who enters the OpenRouter key accepts the provider charges and should set a provider-side spending limit.
 
 ## The files
 

@@ -105,6 +105,39 @@ def test_static_page_contract():
     assert 'key.value = ""' not in script
 
 
+@pytest.mark.parametrize(
+    ("current_model", "current_option", "retired_model"),
+    (
+        (
+            "openai/gpt-5.6-luna",
+            '<option value="openai/gpt-5.6-luna">GPT-5.6 Luna</option>',
+            "openai/gpt-6-sol",
+        ),
+        (
+            "anthropic/claude-haiku-4.5",
+            '<option value="anthropic/claude-haiku-4.5">Claude Haiku 4.5</option>',
+            "anthropic/claude-sonnet-5",
+        ),
+    ),
+)
+def test_current_models_are_selectable_and_retired_models_are_rejected(
+    client, current_model, current_option, retired_model
+):
+    """Keep exact OpenRouter menu identifiers and new-work validation aligned."""
+    page = (ROOT / "index.html").read_text()
+    # New experiments use each verified identifier and its readable menu label.
+    assert current_model in ALLOWED_MODELS
+    assert current_option in page
+    # Retired identifiers can remain in historical records, but not new requests.
+    assert retired_model not in ALLOWED_MODELS
+    assert retired_model not in page
+    response = client.post(
+        "/api/interact",
+        json={"api_key": "sample-secret", "model": retired_model, "prompt": "Hello"},
+    )
+    assert response.status_code == 400
+
+
 def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch):
     """Give a helpful absence and escape external model names when data exists."""
     monkeypatch.setattr(module, "RECORDS", tmp_path / "missing.jsonl")
@@ -166,7 +199,7 @@ def test_interaction_validation_and_mocked_success(client, module, monkeypatch):
     )
     response = client.post(
         "/api/interact",
-        json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "prompt": "Hello"},
+        json={"api_key": "sample-secret", "model": "openai/gpt-5.6-luna", "prompt": "Hello"},
     )
     assert response.json == {
         "answer": "Safe answer",
@@ -186,7 +219,7 @@ def test_interaction_returns_safe_partial_text_for_truncation(client, module, mo
     monkeypatch.setattr(module, "chat", truncated)
     response = client.post(
         "/api/interact",
-        json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "prompt": "Hello"},
+        json={"api_key": "sample-secret", "model": "openai/gpt-5.6-luna", "prompt": "Hello"},
     )
     assert response.status_code == 200
     assert response.json == {
@@ -227,7 +260,7 @@ def test_stream_framing_status_eta_and_terminal(client, module, monkeypatch):
     monkeypatch.setattr(module, "run_experiment", fake)
     response = client.post(
         "/api/experiments/stream",
-        json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "batches": 1, "turns": 1},
+        json={"api_key": "sample-secret", "model": "openai/gpt-5.6-luna", "batches": 1, "turns": 1},
     )
     events = [json.loads(line) for line in response.text.splitlines()]
     assert [event["type"] for event in events] == ["status", "status", "success"]
@@ -254,7 +287,7 @@ def test_full_research_stream_is_checkpointed_and_resumable(client, module, monk
     request_data = {
         "api_key": "sample-secret",
         "run_mode": "research",
-        "model": "openai/gpt-6-sol",
+        "model": "openai/gpt-5.6-luna",
         "sessions": 1,
     }
     response = client.post("/api/experiments/stream", json=request_data)
@@ -283,7 +316,7 @@ def test_interrupted_run_is_persisted_and_can_resume(client, module, monkeypatch
     def interrupted(*_args, persist, run_id, **_kwargs):
         record = {
             "session": 1,
-            "model": "openai/gpt-6-sol",
+            "model": "openai/gpt-5.6-luna",
             "variant": "bare",
             "depth": 1,
             "score": 50,
@@ -303,7 +336,7 @@ def test_interrupted_run_is_persisted_and_can_resume(client, module, monkeypatch
     monkeypatch.setattr(module, "run_experiment", interrupted)
     request_data = {
         "api_key": "sample-secret",
-        "model": "openai/gpt-6-sol",
+        "model": "openai/gpt-5.6-luna",
         "batches": 1,
         "turns": 1,
     }
@@ -363,7 +396,7 @@ def test_lost_lease_cannot_write_interrupted_cleanup_snapshot(client, module, mo
         "/api/experiments/stream",
         json={
             "api_key": "sample-secret",
-            "model": "openai/gpt-6-sol",
+            "model": "openai/gpt-5.6-luna",
             "batches": 1,
             "turns": 1,
         },
@@ -383,7 +416,7 @@ def test_lost_lease_cannot_write_interrupted_cleanup_snapshot(client, module, mo
 
 def test_run_status_distinguishes_active_stalled_and_complete(client, module):
     """Derive liveness from durable heartbeat expiry without exposing record text."""
-    state = module.create_run("openai/gpt-6-sol", 1, 1)
+    state = module.create_run("openai/gpt-5.6-luna", 1, 1)
     state["status"] = "running"
     state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
     state["lease_expires_at"] = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
@@ -404,7 +437,7 @@ def test_run_status_distinguishes_active_stalled_and_complete(client, module):
 
 def test_delete_rejects_active_run_then_removes_idle_snapshot(client, module):
     """Keep an active worker snapshot, then delete it after its lease is released."""
-    state = module.create_run("openai/gpt-6-sol", 1, 1)
+    state = module.create_run("openai/gpt-5.6-luna", 1, 1)
     _write_snapshot(module, state)
     lease = module.acquire_lease(state["run_id"], module.EXPERIMENTS)
     endpoint = f"/api/experiments/{state['run_id']}"
@@ -435,7 +468,7 @@ def test_missing_gcsfuse_returns_service_unavailable(client, module, monkeypatch
     monkeypatch.setattr(lease_module, "get_backend", unavailable)
     request_data = {
         "api_key": "sample-secret",
-        "model": "openai/gpt-6-sol",
+        "model": "openai/gpt-5.6-luna",
         "batches": 1,
         "turns": 1,
     }
@@ -460,7 +493,7 @@ def test_preview_resume_releases_lease_after_unwrapped_snapshot_read_error(
     monkeypatch.setattr(SnapshotFencer, "load_run", failed_read)
     request_data = {
         "api_key": "sample-secret",
-        "model": "openai/gpt-6-sol",
+        "model": "openai/gpt-5.6-luna",
         "batches": 1,
         "turns": 1,
         "resume_run_id": run_id,
@@ -490,7 +523,7 @@ def test_streamed_failures_are_sanitized(client, module, monkeypatch, failure):
     monkeypatch.setattr(module, "run_experiment", fake)
     response = client.post(
         "/api/experiments/stream",
-        json={"api_key": "sample-secret", "model": "openai/gpt-6-sol", "batches": 1, "turns": 1},
+        json={"api_key": "sample-secret", "model": "openai/gpt-5.6-luna", "batches": 1, "turns": 1},
     )
     events = [json.loads(line) for line in response.text.splitlines()]
     assert events[-1]["type"] == "error"
@@ -501,7 +534,7 @@ def test_workload_limits(client):
     """Reject excess work before producing a streaming response."""
     response = client.post(
         "/api/experiments/stream",
-        json={"api_key": "x", "model": "openai/gpt-6-sol", "batches": 3, "turns": 1},
+        json={"api_key": "x", "model": "openai/gpt-5.6-luna", "batches": 3, "turns": 1},
     )
     assert response.status_code == 400
     assert response.content_type == "application/json"
@@ -509,7 +542,7 @@ def test_workload_limits(client):
 
 def test_legacy_preview_reserves_unknown_paid_attempts():
     """Prevent a pre-accounting preview snapshot from receiving a fresh paid budget."""
-    state = create_run("openai/gpt-6-sol", 1, 1, seed=7)
+    state = create_run("openai/gpt-5.6-luna", 1, 1, seed=7)
     state.pop("paid_request_attempts")
     # Missing historical failure data requires the conservative full allowance.
     restored = parse_run(json.dumps(state), state["run_id"])
@@ -537,6 +570,25 @@ def test_workload_help_discloses_logical_units_and_maximum_paid_requests(client)
     assert b'id="cost-estimate"' in response.data
     assert b"Rough cost range:" in script.data
     assert b'model.addEventListener("change", showWorkload)' in script.data
-    assert b"500 input + 300 output tokens" in script.data
-    assert b"8,000 input + 8,192 output tokens" in script.data
+    assert b"completed 288-unit studies" in script.data
+    assert b"$0.08 with Llama 4 Maverick" in script.data
+    assert b"$2.10 with Gemini 3.8 Flash" in script.data
     assert b"set an OpenRouter spending limit" in script.data
+
+
+def test_model_prices_and_model_change_recalculate_cost_disclosure(client):
+    """Price current models at verified base rates and refresh on selection."""
+    script = client.get("/static/app.js").text
+    # Each selected menu identifier must index its exact-model price snapshot.
+    assert '"openai/gpt-5.6-luna": {input: 0.0000002, output: 0.0000012}' in script
+    assert '"anthropic/claude-haiku-4.5": {input: 0.000001, output: 0.000005}' in script
+    assert "const price = MODEL_PRICES[model.value];" in script
+    # Both empirical anchors are normalized, then applied to the selected model.
+    assert "0.08 / REFERENCE_LOGICAL_UNITS" in script
+    assert "2.10 / REFERENCE_LOGICAL_UNITS" in script
+    assert "logicalUnits * blendedPrice * OBSERVED_COST_FACTORS.low" in script
+    assert "logicalUnits * blendedPrice * OBSERVED_COST_FACTORS.high" in script
+    # A model change reruns the complete workload path, including its cost calculation.
+    assert 'model.addEventListener("change", showWorkload)' in script
+    workload = script.split("function showWorkload()", 1)[1].split("function showMode()", 1)[0]
+    assert "showCostEstimate(logicalUnits);" in workload

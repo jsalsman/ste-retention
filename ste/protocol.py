@@ -83,8 +83,8 @@ DEFAULT_MAX_BATCHES = 6
 # Exact OpenRouter identifiers keep each experiment reproducible as aliases move.
 ALLOWED_MODELS = frozenset(
     {
-        "anthropic/claude-sonnet-5",
-        "openai/gpt-6-sol",
+        "anthropic/claude-haiku-4.5",
+        "openai/gpt-5.6-luna",
         "google/gemini-3.8-flash",
         "meta-llama/llama-4-maverick",
     }
