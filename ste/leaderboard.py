@@ -11,6 +11,10 @@ from ste.statistics import paired_t
 # These labels are explanatory rather than abbreviated statistical jargon. They are
 # rendered as a definition list so screen-reader and sighted users get the same context.
 METRIC_DEFINITIONS = (
+    (
+        "Naming alone effect",
+        "Mean paired change from naming ASD-STE100 without spelling out its rules.",
+    ),
     ("Bare baseline", "Mean score for the bare prompt, before naming or rules are added."),
     (
         "Rule effect",
@@ -79,6 +83,23 @@ def _estimate_cell(summary: tuple[float, float | None, float | None], *, signed:
     return f"{estimate} (95% CI {format(lower, format_spec)} to {format(upper, format_spec)})"
 
 
+def _elapsed_cell(run_seconds: dict[object, float], expected_runs: set[object]) -> str:
+    """Format total elapsed wall time only when every contributing run has safe metadata."""
+    # Partial timing would understate the workload, so mixed historical/current rows
+    # receive the same explicit unavailable treatment as fully historical rows.
+    if not expected_runs.issubset(run_seconds):
+        return "Unavailable"
+    total_seconds = round(sum(run_seconds[run_id] for run_id in expected_runs))
+    # A compact duration remains readable beside wide confidence-interval columns.
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
 def _render_explanation() -> tuple[str, str]:
     """Return separate study-context and uncertainty sections for flexible page ordering."""
     # Definition markup is static and the global definitions contain only trusted text.
@@ -137,12 +158,13 @@ def _render_table(rows: list[str]) -> str:
         "<caption>Mean compliance scores and paired score-point effects with two-sided 95% "
         "confidence intervals.</caption>"
         # Compatibility columns explain why the same model can occupy multiple rows.
-        "<thead><tr><th>Model</th><th>Protocol version</th><th>Scoring version</th>"
+        "<thead><tr><th>Naming alone effect, mean and 95% CI</th><th>Model</th>"
+        "<th>Protocol version</th><th>Scoring version</th>"
         # Each estimate header explicitly promises its accompanying interval.
         "<th>Bare baseline, mean and 95% CI</th><th>Rule effect, mean and 95% CI</th>"
         "<th>Naming effect, mean and 95% CI</th><th>Interaction, mean and 95% CI</th>"
         # Count the independent clustered units rather than the underlying depth cells.
-        "<th>Paired sessions</th></tr></thead>"
+        "<th>Paired sessions</th><th>Run elapsed</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
@@ -189,8 +211,11 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
 
     # Cells first collect within their independent run/session sampling unit.
     clustered: dict[
-        tuple[str, object, object, object, object], list[tuple[float, float, float, float]]
+        tuple[str, object, object, object, object], list[tuple[float, float, float, float, float]]
     ] = {}
+    # Timing belongs to a complete parent run rather than one response record. Values
+    # are deduplicated by run below so repeated sessions and depths cannot inflate them.
+    elapsed_by_run: dict[object, float] = {}
     for (model, run_id, session, _depth, protocol, scoring), arms in paired.items():
         counts = {len(values) for values in arms.values()}
         if len(arms) != 4 or len(counts) != 1:
@@ -199,39 +224,70 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         for bare, rules, named, named_rules in zip(
             arms["bare"], arms["rules"], arms["named"], arms["named_rules"], strict=True
         ):
+            # The requested ranking contrast isolates naming when no rules are present.
+            naming_alone_effect = named - bare
             # Main effects average the simple contrast across both levels of the other factor.
             rule_effect = ((rules - bare) + (named_rules - named)) / 2
             naming_effect = ((named - bare) + (named_rules - rules)) / 2
             interaction = named_rules - named - rules + bare
             # Repeated depths and retries in one session are dependent, so cluster them.
             clustered.setdefault((model, run_id, session, protocol, scoring), []).append(
-                (bare, rule_effect, naming_effect, interaction)
+                (naming_alone_effect, bare, rule_effect, naming_effect, interaction)
             )
+        # Timing metadata is identical across records copied from one completed snapshot.
+        # Validate it again because JSONL and direct callers can supply arbitrary records.
+        run_elapsed = next(
+            (
+                record.get("_run_elapsed_seconds")
+                for record in records
+                if record.get("run_id") == run_id
+            ),
+            None,
+        )
+        if isinstance(run_elapsed, (int, float)) and not isinstance(run_elapsed, bool):
+            numeric_elapsed = float(run_elapsed)
+            if math.isfinite(numeric_elapsed) and numeric_elapsed >= 0:
+                elapsed_by_run[run_id] = numeric_elapsed
     # Average each cluster into one observation before estimating sampling uncertainty.
-    grouped: dict[tuple[str, object, object], list[tuple[float, float, float, float]]] = {}
+    grouped: dict[tuple[str, object, object], list[tuple[float, float, float, float, float]]] = {}
+    grouped_runs: dict[tuple[str, object, object], set[object]] = {}
     for (model, _run_id, _session, protocol, scoring), cells in clustered.items():
         # Column-wise means give baseline and three effects equal session-level weight.
         session_summary = tuple(statistics.mean(values) for values in zip(*cells, strict=True))
-        grouped.setdefault((model, protocol, scoring), []).append(session_summary)
+        group_key = (model, protocol, scoring)
+        grouped.setdefault(group_key, []).append(session_summary)
+        grouped_runs.setdefault(group_key, set()).add(_run_id)
     rows = []
-    for (model, protocol, scoring), contrasts in sorted(
-        grouped.items(), key=lambda item: tuple(str(value) for value in item[0])
-    ):
+    summaries_by_group = {
+        key: [_mean_interval(values) for values in zip(*contrasts, strict=True)]
+        for key, contrasts in grouped.items()
+    }
+    # Highest naming-only improvement leads the table; stable labels break equal-effect ties.
+    ordered_groups = sorted(
+        grouped,
+        key=lambda key: (-summaries_by_group[key][0][0], *(str(value) for value in key)),
+    )
+    for model, protocol, scoring in ordered_groups:
+        group_key = (model, protocol, scoring)
+        contrasts = grouped[group_key]
         # Both displayed text and data attributes are escaped from external records.
         safe_model = html.escape(model, quote=True)
         safe_protocol = html.escape(str(protocol), quote=True)
         safe_scoring = html.escape(str(scoring), quote=True)
         # Summarize session clusters rather than treating repeated depths as independent.
-        summaries = [_mean_interval(values) for values in zip(*contrasts, strict=True)]
+        summaries = summaries_by_group[group_key]
+        # Naming-only and factorial effects show direction; only the baseline is unsigned.
+        # The positional flags mirror the tuple assembled for each complete cell above.
         cells = [
-            _estimate_cell(summary, signed=index > 0) for index, summary in enumerate(summaries)
+            _estimate_cell(summary, signed=index != 1) for index, summary in enumerate(summaries)
         ]
         rows.append(
-            f'<tr data-model="{safe_model}"><th scope="row">{safe_model}</th>'
+            f'<tr data-model="{safe_model}"><td>{cells[0]}</td><th scope="row">{safe_model}</th>'
             f"<td>{safe_protocol}</td><td>{safe_scoring}</td>"
-            f"<td>{cells[0]}</td><td>{cells[1]}</td>"
-            f"<td>{cells[2]}</td><td>{cells[3]}</td>"
-            f"<td>{len(contrasts)}</td></tr>"
+            f"<td>{cells[1]}</td><td>{cells[2]}</td>"
+            f"<td>{cells[3]}</td><td>{cells[4]}</td>"
+            f"<td>{len(contrasts)}</td>"
+            f"<td>{_elapsed_cell(elapsed_by_run, grouped_runs[group_key])}</td></tr>"
         )
     label = "Synthetic preview — not experimental data" if synthetic else "Experiment results"
     # Keep the primary leaderboard above the supporting uncertainty detail so visitors
