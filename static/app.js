@@ -187,8 +187,14 @@
       resume.value = event.run_id;
       result.textContent = `Run ID: ${event.run_id}`;
     }
+    // Convert the server's measured seconds to a readable minute estimate at display time.
+    const etaMinutes = Number.isFinite(event.eta_seconds) && event.eta_seconds >= 0
+      ? (event.eta_seconds / 60).toFixed(1)
+      : null;
     // ETA stays textual and approximate; the interface intentionally has no progress bar.
-    overlayEta.textContent = Number.isFinite(event.eta_seconds) ? `Approximately ${event.eta_seconds} seconds remaining.` : "Estimating time remaining…";
+    overlayEta.textContent = etaMinutes === null
+      ? "Estimating time remaining…"
+      : `Approximately ${etaMinutes} minutes remaining.`;
     if (event.type === "success") {
       // Preview snapshots remain resumable evidence, but only research records are published.
       const destination = submittedMode === "research"

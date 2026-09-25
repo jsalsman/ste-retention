@@ -139,6 +139,15 @@ def test_success_copy_distinguishes_preview_from_published_research():
     assert "runMode.value" not in success_branch
 
 
+def test_browser_displays_eta_in_minutes_with_one_decimal_place():
+    """Convert measured server seconds to an explicitly approximate minute ETA."""
+    script = (ROOT / "static" / "app.js").read_text()
+    # Keep the wire value in seconds while presenting a more useful minute estimate.
+    assert "(event.eta_seconds / 60).toFixed(1)" in script
+    assert "Approximately ${etaMinutes} minutes remaining." in script
+    assert "${event.eta_seconds} seconds remaining" not in script
+
+
 def test_interaction_validation_and_mocked_success(client, module, monkeypatch):
     """Reject invalid inputs and return only mocked model output on success."""
     assert client.post("/api/interact", json={}).status_code == 400
