@@ -25,10 +25,10 @@
     researchOptions.hidden = !research;
     for (const input of previewOptions.querySelectorAll("input")) input.disabled = research;
     for (const input of researchOptions.querySelectorAll("input")) input.disabled = !research;
-    // State the paid workload before the user submits the form.
+    // Distinguish durable units from the worst-case paid continuation requests.
     document.querySelector("#mode-help").textContent = research
-      ? "The full protocol is resumable and can take longer than the web request limit. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”"
-      : "The preview uses all four variants and makes at most 12 calls. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”";
+      ? "The full protocol is resumable and can take longer than the web request limit. Six default sessions use 288 logical generations and at most 1,152 paid provider requests. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”"
+      : "The preview uses all four variants, at most 12 logical generations, and at most 48 paid provider requests. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”";
   }
 
   /** Read and validate the shared credential without copying it into browser storage. */

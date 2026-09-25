@@ -1,7 +1,12 @@
 """Transport-independent checks for resumable experiment orchestration."""
 
-from ste.experiment import INTERACTIVE_DEADLINE_SECONDS, MAX_WORK_UNITS, run_experiment
-from ste.models.openrouter import DEFAULT_MAX_TOKENS
+from ste.experiment import (
+    INTERACTIVE_DEADLINE_SECONDS,
+    MAX_PROVIDER_REQUESTS,
+    MAX_WORK_UNITS,
+    run_experiment,
+)
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, MAX_CONTINUATIONS
 
 
 def test_resume_skips_saved_unit_and_rebuilds_context():
@@ -81,3 +86,11 @@ def test_preview_uses_expanded_generation_token_limit():
     # Each of the four variants must receive the same shared expanded allowance.
     assert events[-1]["type"] == "success"
     assert token_limits == [DEFAULT_MAX_TOKENS] * 4
+
+
+def test_preview_paid_request_ceiling_includes_all_continuations():
+    """Define the interactive ceiling in worst-case paid provider requests."""
+    # Each logical preview unit can use its initial request plus bounded continuations.
+    assert MAX_PROVIDER_REQUESTS == MAX_WORK_UNITS * (MAX_CONTINUATIONS + 1)
+    # The currently advertised maximum is twelve units times four provider requests.
+    assert MAX_PROVIDER_REQUESTS == 48

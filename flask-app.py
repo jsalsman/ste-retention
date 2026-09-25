@@ -339,7 +339,7 @@ def _research_stream(data: dict, api_key: str) -> Response:
         completed = len(state["units"])
         completed_at_start = completed
         # The validated workload gives every event a stable denominator.
-        total = config.workload()["total_calls"]
+        total = config.workload()["total_units"]
         terminal = False
         try:
             # Send the resume handle before any paid worker call can fail or time out.
@@ -376,13 +376,13 @@ def _research_stream(data: dict, api_key: str) -> Response:
                         "run_id": state["run_id"],
                     }
                 else:
-                    # Every nonterminal worker event represents one newly durable call.
+                    # Every nonterminal worker event represents one newly durable unit.
                     completed += 1
                     measured = completed - completed_at_start
                     # Report persisted work, never speculative or in-flight work.
                     event = {
                         "type": "status",
-                        "message": f"Saved research call {completed} of {total}.",
+                        "message": f"Saved research logical unit {completed} of {total}.",
                         "completed": completed,
                         "total": total,
                         "elapsed_seconds": round(elapsed, 2),
@@ -477,7 +477,7 @@ def experiment_status(run_id: str):
             )
             state = load_state(path, config, run_id)
             completed = len(state["units"])
-            total = config.workload()["total_calls"]
+            total = config.workload()["total_units"]
         else:
             state = load_run(EXPERIMENTS, run_id)
             completed = len(state["records"])

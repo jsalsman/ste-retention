@@ -11,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
-from ste.models.openrouter import DEFAULT_MAX_TOKENS, chat_text
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, MAX_CONTINUATIONS, chat_text
 from ste.protocol import (
     ALLOWED_MODELS,
     DEFAULT_RESEARCH_DEPTHS,
@@ -24,10 +24,12 @@ from ste.protocol import (
 from ste.scoring import load_approved_words, parse_judge_score, score_text
 
 # Research limits protect unattended jobs without inheriting the web preview's
-# limits. Operators can choose smaller values and must confirm the workload.
+# limits. The paid-request ceiling includes every allowed continuation attempt,
+# while logical-unit totals remain suitable for checkpoint progress reporting.
 MAX_RESEARCH_SESSIONS = 10_000
 MAX_RESEARCH_DEPTH = 128
 MAX_RESEARCH_CALLS = 1_000_000
+MAX_REQUESTS_PER_UNIT = MAX_CONTINUATIONS + 1
 
 
 @dataclass(frozen=True)
@@ -71,19 +73,29 @@ class ResearchConfig:
         if type(self.max_tokens) is not int or self.max_tokens <= 0:
             # A stable positive allowance is resume-critical and bounds every generation.
             raise ValueError("The generation token limit must be a positive integer.")
-        if self.workload()["total_calls"] > MAX_RESEARCH_CALLS:
-            raise ValueError("The research workload exceeds the safety limit.")
+        if self.workload()["maximum_provider_requests"] > MAX_RESEARCH_CALLS:
+            # Enforce the worst case, not only the number of durable logical units.
+            raise ValueError("The research workload exceeds the paid-request safety limit.")
 
     def workload(self) -> dict[str, int]:
-        """Return generation and separately identifiable judge call counts."""
-        generation = len(self.models) * self.sessions * len(VARIANTS) * max(self.depths)
-        judges = len(self.models) * self.sessions * len(VARIANTS) * len(self.depths)
-        judges = judges if self.judge_model else 0
-        # Keeping judge calls separate makes paid confirmation meaningful.
+        """Return logical units and maximum paid provider-request counts.
+
+        Generation and judge units each normally use one provider request. A
+        token-limited response can use ``MAX_REQUESTS_PER_UNIT`` requests, so
+        safety validation and operator confirmation use the maximum values while
+        streaming progress uses logical units that correspond to checkpoints.
+        """
+        generation_units = len(self.models) * self.sessions * len(VARIANTS) * max(self.depths)
+        judge_units = len(self.models) * self.sessions * len(VARIANTS) * len(self.depths)
+        judge_units = judge_units if self.judge_model else 0
+        # Both kinds use the same bounded complete-output adapter and retry allowance.
         return {
-            "generation_calls": generation,
-            "judge_calls": judges,
-            "total_calls": generation + judges,
+            "generation_units": generation_units,
+            "judge_units": judge_units,
+            "total_units": generation_units + judge_units,
+            "maximum_generation_requests": generation_units * MAX_REQUESTS_PER_UNIT,
+            "maximum_judge_requests": judge_units * MAX_REQUESTS_PER_UNIT,
+            "maximum_provider_requests": (generation_units + judge_units) * MAX_REQUESTS_PER_UNIT,
         }
 
 
@@ -332,8 +344,9 @@ def main(argv: list[str] | None = None) -> int:
     state = load_state(args.state, config, args.run_id) if args.run_id else new_state(config)
     workload = config.workload()
     print(
-        f"Workload: {workload['generation_calls']} generation + "
-        f"{workload['judge_calls']} judge calls; "
+        f"Workload: {workload['generation_units']} generation + "
+        f"{workload['judge_units']} judge logical units; "
+        f"at most {workload['maximum_provider_requests']} paid provider requests; "
         f"budget cap ${config.budget_usd:.2f}."
     )
     if not args.yes:

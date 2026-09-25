@@ -13,6 +13,8 @@ from ste.protocol import (
 )
 from ste.models.openrouter import DEFAULT_MAX_TOKENS
 from ste.research import (
+    MAX_RESEARCH_CALLS,
+    MAX_REQUESTS_PER_UNIT,
     ResearchConfig,
     load_state,
     new_state,
@@ -54,6 +56,22 @@ def test_research_defaults_to_expanded_generation_token_limit():
     assert config.max_tokens == DEFAULT_MAX_TOKENS == 8192
     # Validation confirms the shared default is a supported positive integer limit.
     config.validate()
+
+
+def test_workload_reports_and_enforces_maximum_provider_requests():
+    """Count every bounded continuation in paid confirmation and safety limits."""
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,), judge_model="anthropic/claude-sonnet-5")
+    workload = config.workload()
+    # Four variants create four generation and four judge checkpoint units.
+    assert workload["generation_units"] == workload["judge_units"] == 4
+    # Each unit can consume the initial call plus every bounded continuation.
+    assert workload["maximum_provider_requests"] == 8 * MAX_REQUESTS_PER_UNIT
+
+    excessive = ResearchConfig(("openai/gpt-6-sol",), 1_954, (32,))
+    assert excessive.workload()["maximum_provider_requests"] > MAX_RESEARCH_CALLS
+    # Validation applies the ceiling to paid requests rather than logical checkpoints.
+    with pytest.raises(ValueError, match="paid-request safety limit"):
+        excessive.validate()
 
 
 @pytest.mark.parametrize("depths", [(-1, 1), (0, 1), (1, 2.5, 3), (True, 2)])
@@ -159,7 +177,7 @@ def test_research_resumes_inside_partial_arm_without_repeating_calls(tmp_path):
     prior_calls = len(calls)
     events = list(run_research("secret", config, resumed, lambda _value: None, request=request))
     assert events[-1]["type"] == "success"
-    assert len(calls) - prior_calls == config.workload()["generation_calls"] - 1
+    assert len(calls) - prior_calls == config.workload()["generation_units"] - 1
     assert any(message["content"] == "Reply 1." for message in calls[prior_calls])
 
 

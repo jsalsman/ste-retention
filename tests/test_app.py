@@ -467,3 +467,17 @@ def test_workload_limits(client):
     )
     assert response.status_code == 400
     assert response.content_type == "application/json"
+
+
+def test_workload_help_discloses_logical_units_and_maximum_paid_requests(client):
+    """Keep initial and dynamic browser copy aligned with continuation costs."""
+    response = client.get("/")
+    script = client.get("/static/app.js")
+    # Static markup covers the initial preview and default full-study workload.
+    assert b"12 logical generations" in response.data
+    assert b"48 paid provider requests" in response.data
+    assert b"288 logical generations" in response.data
+    assert b"1,152 paid provider requests" in response.data
+    # Dynamic mode switching must retain the same worst-case paid disclosures.
+    assert b"48 paid provider requests" in script.data
+    assert b"1,152 paid provider requests" in script.data

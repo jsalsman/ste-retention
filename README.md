@@ -59,21 +59,21 @@ The web preview is different. It scores each requested turn and permits only one
 
 ### Study size
 
-The full worker uses this generation-call formula:
+The full worker uses this logical-generation formula:
 
 ```text
 models × sessions × 4 variants × deepest probe
 ```
 
-The default web study uses one model, six sessions, four variants, and a deepest probe of turn 12. Thus, it makes 288 generation calls.
+The default web study uses one model, six sessions, four variants, and a deepest probe of turn 12. Thus, it has 288 logical generations. Each normally uses one paid provider request but can use four when all three continuation attempts are needed, for a maximum of 1,152 paid generation requests.
 
-An optional judge adds this number of calls:
+An optional judge adds this number of logical judge units:
 
 ```text
 models × sessions × 4 variants × number of probe depths
 ```
 
-The web form does not use a judge or an approved-word file. The command-line worker can use both options.
+The web form does not use a judge or an approved-word file. The command-line worker can use both options. Judge units have the same maximum of four paid provider requests each. The research safety ceiling is enforced against the combined maximum provider-request count, not the smaller logical-unit count.
 
 ### Adaptive control
 
@@ -153,8 +153,8 @@ the provider catalog on 2026-09-24. Exact identifiers make a study more
 reproducible than moving `latest` aliases, but the catalog can change. Verify
 availability before you start a large study.
 
-* **Short preview:** This mode uses all four variants. It has at most 12 logical generations; token-limit continuations can add up to three calls per generation.
-* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 logical generations, plus any bounded continuation calls.
+* **Short preview:** This mode uses all four variants. It has at most 12 logical generations and 48 paid provider requests when every generation needs all three continuations.
+* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions have 288 logical generations and at most 1,152 paid provider requests.
 
 “Try one prompt” and experiments are separate workflows. The free-form prompt is
 sent only to `/api/interact` for a single response. Short previews and full research
@@ -181,7 +181,7 @@ python -m ste.research \
   --state /durable/research/RUN.json --yes
 ```
 
-The command shows 576 generation calls and 144 judge calls for this example. The `--yes` option confirms the displayed workload. It does not confirm a price estimate.
+The command shows 576 generation and 144 judge logical units for this example, plus the maximum of 2,880 paid provider requests after bounded continuations. The `--yes` option confirms this displayed workload. It does not confirm a price estimate.
 
 To resume, use the same state path and all the same configuration values. Add `--run-id` with the saved run ID. The worker rejects a changed configuration before it makes a new paid call.
 
@@ -191,11 +191,11 @@ The current code does not contain a pricing table. It does not calculate a curre
 
 The old program estimated 5.92 USD for one default batch. It estimated 12 to 18 USD for a typical adaptive run. These historical values do not describe the current fixed-session worker. Do not use them as a current quote.
 
-Before a run, calculate the call count from the formulas in the design section. Check the current prices for each selected model in OpenRouter. Include the growing conversation history, output-token limit, and optional judge calls in your estimate.
+Before a run, calculate both logical units and the maximum provider-request count from the formulas in the design section. Check the current prices for each selected model in OpenRouter. Include the growing conversation history, output-token limit, optional judge units, and up to three continuation requests per unit in your estimate.
 
 The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
-The web form shows the default generation-call count before a full run. It does not show a currency estimate. The user who enters the OpenRouter key accepts the provider charges.
+The web form shows both the default logical-generation count and maximum paid provider-request count before a full run. It does not show a currency estimate. The user who enters the OpenRouter key accepts the provider charges.
 
 ## The files
 
@@ -205,7 +205,7 @@ This module runs the full experiment. It also supplies the `python -m ste.resear
 
 **Configuration.** Command options set the models, sessions, probe depths, seed, timeouts, budget value, optional word list, optional judge, state path, and resume ID.
 
-**Workload confirmation.** The module calculates generation and judge call counts. It prints the counts and the configured budget value. It requires `--yes` before paid work starts.
+**Workload confirmation.** The module calculates generation and judge logical-unit counts and their combined maximum paid provider-request count. It prints those counts and the configured budget value. It requires `--yes` before paid work starts, and rejects a worst-case request count above the research safety ceiling.
 
 **One session.** The module sends one system instruction for each variant. It keeps all user and assistant messages in that variant's history. It sends the same prompt sequence to all four variants.
 
