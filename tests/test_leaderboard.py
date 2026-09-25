@@ -46,7 +46,7 @@ def test_factorial_main_effects_average_both_levels():
     # Marginal effects are rules=(10+20)/2 and naming=(20+30)/2.
     assert "+15.0" in rendered
     assert "+25.0" in rendered
-    assert "+20.0" in rendered
+    assert "70.0" in rendered
 
 
 def test_results_precede_uncertainty_in_dark_dashboard():
@@ -81,7 +81,7 @@ def test_intervals_use_complete_cell_baselines_and_paired_effects():
     numeric = [tuple(float(value) for value in cell) for cell in cells]
     assert numeric == pytest.approx(
         [
-            (-5.5, -11.9, 0.9),
+            (44.5, -76.2, 165.2),
             (50.0, -77.1, 177.1),
             (6.0, -13.1, 25.1),
             (-7.5, -7.5, -7.5),
@@ -179,8 +179,8 @@ def test_incomplete_cells_do_not_enter_interval_sample():
     assert "<td>2</td>" in rendered
 
 
-def test_rows_rank_by_naming_effect_without_rules_and_show_runtime():
-    """Sort descending by the simple named-minus-bare effect and total complete-run time."""
+def test_rows_rank_by_named_score_without_rules_and_show_runtime():
+    """Rank by the named-arm score and show total complete-run elapsed time."""
     # Model names sort opposite to their effects so this catches accidental label sorting.
     # Two runs in the winning row verify that elapsed values are added once per run.
     records = []
@@ -203,5 +203,7 @@ def test_rows_rank_by_naming_effect_without_rules_and_show_runtime():
     rendered = render_leaderboard(records)
 
     assert rendered.index('data-model="a-high"') < rendered.index('data-model="z-low"')
-    assert rendered.index("<td>+20.0") < rendered.index('<th scope="row">a-high</th>')
+    assert '<th scope="row" aria-label="Rank 1">1</th><td>a-high</td><td>60.0' in rendered
+    assert "<th>Protocol version</th>" not in rendered
+    assert "<th>Scoring version</th>" not in rendered
     assert "<td>2m 0s</td>" in rendered

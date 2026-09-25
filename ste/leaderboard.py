@@ -12,8 +12,8 @@ from ste.statistics import paired_t
 # rendered as a definition list so screen-reader and sighted users get the same context.
 METRIC_DEFINITIONS = (
     (
-        "Naming alone effect",
-        "Mean paired change from naming ASD-STE100 without spelling out its rules.",
+        "Named without rules",
+        "Mean compliance score when ASD-STE100 is named without spelling out its rules.",
     ),
     ("Bare baseline", "Mean score for the bare prompt, before naming or rules are added."),
     (
@@ -158,8 +158,8 @@ def _render_table(rows: list[str]) -> str:
         "<caption>Mean compliance scores and paired score-point effects with two-sided 95% "
         "confidence intervals.</caption>"
         # Compatibility columns explain why the same model can occupy multiple rows.
-        "<thead><tr><th>Naming alone effect, mean and 95% CI</th><th>Model</th>"
-        "<th>Protocol version</th><th>Scoring version</th>"
+        "<thead><tr><th>Rank</th><th>Model</th>"
+        "<th>Named without rules, mean and 95% CI</th>"
         # Each estimate header explicitly promises its accompanying interval.
         "<th>Bare baseline, mean and 95% CI</th><th>Rule effect, mean and 95% CI</th>"
         "<th>Naming effect, mean and 95% CI</th><th>Interaction, mean and 95% CI</th>"
@@ -224,15 +224,15 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         for bare, rules, named, named_rules in zip(
             arms["bare"], arms["rules"], arms["named"], arms["named_rules"], strict=True
         ):
-            # The requested ranking contrast isolates naming when no rules are present.
-            naming_alone_effect = named - bare
+            # The requested ranking value is the named-arm outcome without added rules.
+            named_without_rules = bare + (named - bare)
             # Main effects average the simple contrast across both levels of the other factor.
             rule_effect = ((rules - bare) + (named_rules - named)) / 2
             naming_effect = ((named - bare) + (named_rules - rules)) / 2
             interaction = named_rules - named - rules + bare
             # Repeated depths and retries in one session are dependent, so cluster them.
             clustered.setdefault((model, run_id, session, protocol, scoring), []).append(
-                (naming_alone_effect, bare, rule_effect, naming_effect, interaction)
+                (named_without_rules, bare, rule_effect, naming_effect, interaction)
             )
         # Timing metadata is identical across records copied from one completed snapshot.
         # Validate it again because JSONL and direct callers can supply arbitrary records.
@@ -262,12 +262,12 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         key: [_mean_interval(values) for values in zip(*contrasts, strict=True)]
         for key, contrasts in grouped.items()
     }
-    # Highest naming-only improvement leads the table; stable labels break equal-effect ties.
+    # Highest named-without-rules score leads the table; stable labels break equal-score ties.
     ordered_groups = sorted(
         grouped,
         key=lambda key: (-summaries_by_group[key][0][0], *(str(value) for value in key)),
     )
-    for model, protocol, scoring in ordered_groups:
+    for rank, (model, protocol, scoring) in enumerate(ordered_groups, start=1):
         group_key = (model, protocol, scoring)
         contrasts = grouped[group_key]
         # Both displayed text and data attributes are escaped from external records.
@@ -276,15 +276,16 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         safe_scoring = html.escape(str(scoring), quote=True)
         # Summarize session clusters rather than treating repeated depths as independent.
         summaries = summaries_by_group[group_key]
-        # Naming-only and factorial effects show direction; only the baseline is unsigned.
+        # Factorial effects show direction; the two observed score means are unsigned.
         # The positional flags mirror the tuple assembled for each complete cell above.
         cells = [
-            _estimate_cell(summary, signed=index != 1) for index, summary in enumerate(summaries)
+            _estimate_cell(summary, signed=index > 1) for index, summary in enumerate(summaries)
         ]
         rows.append(
-            f'<tr data-model="{safe_model}"><td>{cells[0]}</td><th scope="row">{safe_model}</th>'
-            f"<td>{safe_protocol}</td><td>{safe_scoring}</td>"
-            f"<td>{cells[1]}</td><td>{cells[2]}</td>"
+            f'<tr data-model="{safe_model}" data-protocol="{safe_protocol}" '
+            f'data-scoring="{safe_scoring}">'
+            f'<th scope="row" aria-label="Rank {rank}">{rank}</th><td>{safe_model}</td>'
+            f"<td>{cells[0]}</td><td>{cells[1]}</td><td>{cells[2]}</td>"
             f"<td>{cells[3]}</td><td>{cells[4]}</td>"
             f"<td>{len(contrasts)}</td>"
             f"<td>{_elapsed_cell(elapsed_by_run, grouped_runs[group_key])}</td></tr>"
