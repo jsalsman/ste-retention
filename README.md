@@ -259,7 +259,9 @@ The current research runner does not use this test for adaptive stopping. The mo
 
 This module renders complete research snapshots. It calculates the rule, name, and interaction contrasts for each complete paired cell.
 
-The current page is a table. It shows the model, protocol version, scoring version, bare baseline, three mean contrasts, and paired-observation count. It does not make the historical SVG confidence-interval chart.
+The current page is a table. It shows the model, protocol version, scoring version, bare baseline, three mean contrasts, paired-session count, and a two-sided 95% confidence interval for every estimate. Each effect is calculated inside a complete matched four-arm cell, then repeated depths within the same run and session are averaged into one sampling unit. The baseline interval likewise uses only the matched bare scores. Intervals use the appropriate Student t critical value for the available degrees of freedom; with fewer than two sessions, the point estimate remains visible and the interval is marked unavailable.
+
+The interval calculation treats run/session clusters as independent. It is not a hierarchical analysis, so pooled sessions from different runs may contain variation at more than one level. An interval describes uncertainty in the aggregate estimate; it is not the range of individual scores or a 95% probability statement about the fixed population effect. Wider intervals represent greater uncertainty and should not be reduced to a binary significance label.
 
 The Flask route reads complete research snapshots from `EXPERIMENTS_DIR`. It can also read the original JSONL format as a migration path.
 

@@ -5,6 +5,31 @@ import math
 import statistics
 
 from ste.records import read_records
+from ste.statistics import paired_t
+
+
+# These labels are explanatory rather than abbreviated statistical jargon. They are
+# rendered as a definition list so screen-reader and sighted users get the same context.
+METRIC_DEFINITIONS = (
+    ("Bare baseline", "Mean score for the bare prompt, before naming or rules are added."),
+    (
+        "Rule effect",
+        "Mean paired change from spelling out the rules, averaged with and without naming.",
+    ),
+    (
+        "Naming effect",
+        "Mean paired change from naming the technique, averaged with and without rules.",
+    ),
+    (
+        "Interaction",
+        "The extra paired change when naming and rules appear together, "
+        "beyond their separate effects.",
+    ),
+    (
+        "Paired observations",
+        "Complete four-arm research cells used to calculate every value in the row.",
+    ),
+)
 
 
 def _number(value: object) -> float:
@@ -16,6 +41,109 @@ def _number(value: object) -> float:
     if not math.isfinite(result) or not 0 <= result <= 100:
         raise ValueError("Leaderboard scores must be finite values from 0 to 100.")
     return result
+
+
+def _mean_interval(values: tuple[float, ...]) -> tuple[float, float | None, float | None]:
+    """Return a finite mean and two-sided 95% CI for complete-cell measurements.
+
+    The dependency-free paired-t helper supplies a Student-t half-width using the
+    available degrees of freedom. A single independent session has a valid point
+    estimate but cannot supply a variance estimate, so both limits are ``None``.
+    """
+    # Inputs are derived only from finite validated scores, but check every boundary so
+    # malformed intermediate values can never reach HTML formatting unnoticed.
+    if not values or not all(math.isfinite(value) for value in values):
+        raise ValueError("Leaderboard summaries require finite complete-cell values.")
+    mean = statistics.mean(values)
+    result = paired_t(list(values))
+    if result is None:
+        # One observation supports the displayed point, not an uncertainty interval.
+        return mean, None, None
+    half_width = result[-1]
+    lower, upper = mean - half_width, mean + half_width
+    if not all(math.isfinite(value) for value in (mean, lower, upper)):
+        # Confidence limits and estimates must remain safe for direct text rendering.
+        raise ValueError("Leaderboard confidence intervals must be finite.")
+    return mean, lower, upper
+
+
+def _estimate_cell(summary: tuple[float, float | None, float | None], *, signed: bool) -> str:
+    """Format one estimate and its associated interval as unambiguous table text."""
+    mean, lower, upper = summary
+    # Contrasts always show a sign; baseline scores retain their familiar score format.
+    format_spec = "+.1f" if signed else ".1f"
+    estimate = format(mean, format_spec)
+    if lower is None or upper is None:
+        # The visible unavailable label prevents a one-cell row implying zero uncertainty.
+        return f"{estimate} (95% CI unavailable; fewer than 2 sessions)"
+    return f"{estimate} (95% CI {format(lower, format_spec)} to {format(upper, format_spec)})"
+
+
+def _render_explanation() -> str:
+    """Return accessible definitions and accurate interpretation guidance for the estimates."""
+    # Definition markup is static and the global definitions contain only trusted text.
+    definitions = "".join(
+        f"<dt>{term}</dt><dd>{description}</dd>" for term, description in METRIC_DEFINITIONS
+    )
+    # Keep study-design details adjacent to the metric definitions they qualify.
+    experiment = (
+        '<section aria-labelledby="about-results"><h2 id="about-results">About the experiment</h2>'
+        # Spell out variant names rather than relying on internal identifiers alone.
+        "<p>The four variants are <strong>bare</strong> (prompt alone), <strong>rules</strong> "
+        "(rules spelled out), <strong>named</strong> (technique named), and "
+        # Define the scale before presenting effect estimates in score points.
+        "<strong>named_rules</strong> (name and rules together). Compliance scores run from "
+        "0 to 100; higher scores mean greater compliance. Effects are paired changes in "
+        f"score points.</p><dl>{definitions}</dl>"
+        # Interaction signs alone do not establish a causal explanation.
+        "<p>A negative interaction may reflect overlap between naming the technique and "
+        "spelling out its rules, but the interaction does not identify its cause.</p></section>"
+    )
+    # Explain the sampling unit explicitly so repeated depths are not mistaken for replicates.
+    uncertainty = (
+        '<section aria-labelledby="uncertainty"><h2 id="uncertainty">Understanding uncertainty</h2>'
+        # Name the finite-sample reference distribution used by the numeric calculation.
+        "<p>A 95% confidence interval (95% CI) uses the Student t critical value for the "
+        "number of contributing sessions. Wider intervals indicate greater uncertainty. It is "
+        # Guard against two common probability and raw-range interpretations of an interval.
+        "neither the range of individual scores nor a 95% probability that the fixed population "
+        "effect lies inside this observed interval. Interpret estimates and uncertainty together, "
+        "rather than reducing them to statistically significant or not significant.</p>"
+        # State cell eligibility before describing the later clustering operation.
+        "<p>Only complete four-arm research cells matched within run, model, session, depth, "
+        "protocol version, and scoring version are included; previews and incomplete runs are "
+        # Repeated depths share history and therefore become one run/session observation.
+        "excluded. Effects are calculated within each matched cell, then repeated depths within "
+        "each run and session are averaged before intervals are calculated. Sessions are treated "
+        # The remaining independence assumption is visible rather than implied.
+        "as independent; this is not a hierarchical analysis across runs or other "
+        "levels.</p></section>"
+    )
+    # Separate blocks keep the HTML construction reviewable without a template engine.
+    return experiment + uncertainty
+
+
+def _render_table(rows: list[str]) -> str:
+    """Return the keyboard-scrollable results table and its empty-state message."""
+    # An explicit empty message remains visible while the table preserves a stable structure.
+    empty = '<p class="empty">No complete experiment records are available.</p>' if not rows else ""
+    # The focusable wrapper lets keyboard users reach columns outside narrow viewports.
+    return (
+        f'{empty}<div class="table-scroll" tabindex="0" '
+        # Name the scroll region independently from the table caption.
+        'aria-label="Scrollable experiment results table"><table>'
+        # The caption gives the unit and interval type before users traverse columns.
+        "<caption>Mean compliance scores and paired score-point effects with two-sided 95% "
+        "confidence intervals.</caption>"
+        # Compatibility columns explain why the same model can occupy multiple rows.
+        "<thead><tr><th>Model</th><th>Protocol version</th><th>Scoring version</th>"
+        # Each estimate header explicitly promises its accompanying interval.
+        "<th>Bare baseline, mean and 95% CI</th><th>Rule effect, mean and 95% CI</th>"
+        "<th>Naming effect, mean and 95% CI</th><th>Interaction, mean and 95% CI</th>"
+        # Count the independent clustered units rather than the underlying depth cells.
+        "<th>Paired sessions</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table></div>"
+    )
 
 
 def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
@@ -58,9 +186,11 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         arms = paired.setdefault((model, run_id, session, depth, protocol, scoring), {})
         arms.setdefault(variant, []).append(_number(record.get("score")))
 
-    # Each versioned group contains baseline, rule-detail, naming, and interaction effects.
-    grouped: dict[tuple[str, object, object], list[tuple[float, float, float, float]]] = {}
-    for (model, _run_id, _session, _depth, protocol, scoring), arms in paired.items():
+    # Cells first collect within their independent run/session sampling unit.
+    clustered: dict[
+        tuple[str, object, object, object, object], list[tuple[float, float, float, float]]
+    ] = {}
+    for (model, run_id, session, _depth, protocol, scoring), arms in paired.items():
         counts = {len(values) for values in arms.values()}
         if len(arms) != 4 or len(counts) != 1:
             # Never compare unmatched responses from different sessions or depths.
@@ -72,10 +202,16 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
             rule_effect = ((rules - bare) + (named_rules - named)) / 2
             naming_effect = ((named - bare) + (named_rules - rules)) / 2
             interaction = named_rules - named - rules + bare
-            # Preserve both compatibility dimensions when aggregating complete cells.
-            grouped.setdefault((model, protocol, scoring), []).append(
+            # Repeated depths and retries in one session are dependent, so cluster them.
+            clustered.setdefault((model, run_id, session, protocol, scoring), []).append(
                 (bare, rule_effect, naming_effect, interaction)
             )
+    # Average each cluster into one observation before estimating sampling uncertainty.
+    grouped: dict[tuple[str, object, object], list[tuple[float, float, float, float]]] = {}
+    for (model, _run_id, _session, protocol, scoring), cells in clustered.items():
+        # Column-wise means give baseline and three effects equal session-level weight.
+        session_summary = tuple(statistics.mean(values) for values in zip(*cells, strict=True))
+        grouped.setdefault((model, protocol, scoring), []).append(session_summary)
     rows = []
     for (model, protocol, scoring), contrasts in sorted(
         grouped.items(), key=lambda item: tuple(str(value) for value in item[0])
@@ -84,28 +220,27 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         safe_model = html.escape(model, quote=True)
         safe_protocol = html.escape(str(protocol), quote=True)
         safe_scoring = html.escape(str(scoring), quote=True)
-        means = [statistics.mean(values) for values in zip(*contrasts, strict=True)]
+        # Summarize session clusters rather than treating repeated depths as independent.
+        summaries = [_mean_interval(values) for values in zip(*contrasts, strict=True)]
+        cells = [
+            _estimate_cell(summary, signed=index > 0) for index, summary in enumerate(summaries)
+        ]
         rows.append(
             f'<tr data-model="{safe_model}"><th scope="row">{safe_model}</th>'
             f"<td>{safe_protocol}</td><td>{safe_scoring}</td>"
-            f"<td>{means[0]:.1f}</td><td>{means[1]:+.1f}</td>"
-            f"<td>{means[2]:+.1f}</td><td>{means[3]:+.1f}</td>"
+            f"<td>{cells[0]}</td><td>{cells[1]}</td>"
+            f"<td>{cells[2]}</td><td>{cells[3]}</td>"
             f"<td>{len(contrasts)}</td></tr>"
         )
     label = "Synthetic preview — not experimental data" if synthetic else "Experiment results"
-    empty = '<p class="empty">No complete experiment records are available.</p>' if not rows else ""
+    # The outer document stays standalone while focused helpers build its substantial blocks.
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{html.escape(label)}</title>"
         '<link rel="stylesheet" href="/static/styles.css"></head>'
-        f'<body><main><p><a href="/">Back to experiment</a></p><h1>{html.escape(label)}</h1>{empty}'
-        "<table><caption>Paired deterministic compliance-score contrasts.</caption>"
-        "<thead><tr><th>Model</th><th>Protocol version</th><th>Scoring version</th>"
-        "<th>Bare baseline</th><th>Rule effect</th>"
-        "<th>Naming effect</th><th>Interaction</th><th>Paired observations</th></tr></thead>"
-        f"<tbody>{''.join(rows)}"
-        "</tbody></table></main></body></html>"
+        f'<body><main><p><a href="/">Back to experiment</a></p><h1>{html.escape(label)}</h1>'
+        f"{_render_explanation()}{_render_table(rows)}</main></body></html>"
     )
 
 
