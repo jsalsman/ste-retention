@@ -123,11 +123,20 @@ def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch
 
 
 def test_success_copy_distinguishes_preview_from_published_research():
-    """Do not direct a completed short preview to a research-only leaderboard."""
+    """Use the submitted mode and show preview records outside the leaderboard."""
     script = (ROOT / "static" / "app.js").read_text()
     # Both terminal messages share one branch but explain the selected mode accurately.
     assert "This short preview is not published on the research leaderboard." in script
     assert "Open the leaderboard to view this completed research run." in script
+    assert "formatPreviewResults(event.records)" in script
+    # The live select value must not relabel a request after its stream has started.
+    assert "showEvent(event, submittedMode)" in script
+    assert "const submittedMode = runMode.value;" in script
+    assert "run_mode:submittedMode" in script
+    success_branch = script.split('if (event.type === "success")', 1)[1].split(
+        'if (event.type === "error")', 1
+    )[0]
+    assert "runMode.value" not in success_branch
 
 
 def test_interaction_validation_and_mocked_success(client, module, monkeypatch):
