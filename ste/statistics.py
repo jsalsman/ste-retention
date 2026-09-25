@@ -49,6 +49,27 @@ def _betai(a: float, b: float, x: float) -> float:
     return 1.0 - math.exp(log_beta) * _betacf(b, a, 1.0 - x) / b
 
 
+def _t_critical_95(freedom: int) -> float:
+    """Return the two-sided 95% Student t critical value for positive degrees of freedom."""
+    if freedom < 1:
+        # A t distribution is defined here only after a sample supplies positive df.
+        raise ValueError("Degrees of freedom must be positive.")
+    lower, upper = 0.0, 1.0
+    # The beta expression is the two-sided tail probability for a positive t value.
+    while _betai(freedom / 2.0, 0.5, freedom / (freedom + upper**2)) > 0.05:
+        upper *= 2.0
+    for _ in range(80):
+        # Bisection is deterministic and amply precise for one-decimal leaderboard output.
+        midpoint = (lower + upper) / 2.0
+        tail = _betai(freedom / 2.0, 0.5, freedom / (freedom + midpoint**2))
+        if tail > 0.05:
+            lower = midpoint
+        else:
+            upper = midpoint
+    # The midpoint of the final bracket avoids consistently choosing either bound.
+    return (lower + upper) / 2.0
+
+
 def paired_t(differences: list[float]) -> tuple[float, int, float, float, float, float] | None:
     """Calculate a paired t result as t, df, p, mean, effect size, and CI half-width."""
     if len(differences) < 2:
@@ -70,4 +91,6 @@ def paired_t(differences: list[float]) -> tuple[float, int, float, float, float,
     statistic = mean / error
     freedom = len(differences) - 1
     probability = _betai(freedom / 2.0, 0.5, freedom / (freedom + statistic**2))
-    return statistic, freedom, probability, mean, mean / deviation, 1.96 * error
+    # Small samples require the heavier-tailed t critical value rather than 1.96.
+    half_width = _t_critical_95(freedom) * error
+    return statistic, freedom, probability, mean, mean / deviation, half_width

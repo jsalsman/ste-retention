@@ -12,6 +12,8 @@ def _arm(
     variant: str,
     score: int,
     *,
+    session: int = 1,
+    depth: int = 1,
     protocol: str = "legacy",
     scoring: str = "legacy",
 ) -> dict:
@@ -20,10 +22,10 @@ def _arm(
     # Minimal records keep this fixture independent from provider response details.
     return {
         "run_id": run_id,
-        "session": 1,
+        "session": session,
         "model": "test-model",
         "variant": variant,
-        "depth": 1,
+        "depth": depth,
         "score": score,
         # Versions identify the compatibility stratum for displayed aggregates.
         "protocol_version": protocol,
@@ -50,9 +52,9 @@ def test_intervals_use_complete_cell_baselines_and_paired_effects():
     """Calculate baseline and all contrasts per repeated matched cell before intervals."""
     # Two repetitions in one durable coordinate exercise repeated paired observations.
     records = []
-    for scores in ((40, 50, 35, 40), (60, 66, 54, 57)):
+    for session, scores in enumerate(((40, 50, 35, 40), (60, 66, 54, 57)), start=1):
         records.extend(
-            _arm("repeated", variant, score)
+            _arm("repeated", variant, score, session=session)
             for variant, score in zip(
                 ("bare", "rules", "named", "named_rules"), scores, strict=True
             )
@@ -66,7 +68,12 @@ def test_intervals_use_complete_cell_baselines_and_paired_effects():
     )
     numeric = [tuple(float(value) for value in cell) for cell in cells]
     assert numeric == pytest.approx(
-        [(50.0, 30.4, 69.6), (6.0, 3.1, 8.9), (-7.5, -7.5, -7.5), (-4.0, -6.0, -2.0)]
+        [
+            (50.0, -77.1, 177.1),
+            (6.0, -13.1, 25.1),
+            (-7.5, -7.5, -7.5),
+            (-4.0, -16.7, 8.7),
+        ]
     )
     assert "<td>2</td>" in rendered
 
@@ -76,8 +83,26 @@ def test_mean_interval_preserves_unbounded_finite_contrasts():
     # Contrasts are score-point changes, so neither values nor limits are scores themselves.
     mean, lower, upper = _mean_interval((-150.0, -50.0))
     assert mean == pytest.approx(-100.0)
-    assert lower == pytest.approx(-198.0)
-    assert upper == pytest.approx(-2.0)
+    assert lower == pytest.approx(-735.3102368)
+    assert upper == pytest.approx(535.3102368)
+
+
+def test_repeated_depths_are_clustered_within_run_session():
+    """Average dependent depths so one run/session contributes one interval observation."""
+    # Three complete depths mirror the continuing-history structure of research runs.
+    records = []
+    for depth, baseline in ((1, 20), (6, 50), (12, 80)):
+        records.extend(
+            _arm("one-run", variant, baseline, depth=depth)
+            for variant in ("bare", "rules", "named", "named_rules")
+        )
+
+    rendered = render_leaderboard(records)
+
+    # The session mean remains 50, but dependent depths do not create a variance estimate.
+    assert "50.0 (95% CI unavailable; fewer than 2 sessions)" in rendered
+    assert "<th>Paired sessions</th>" in rendered
+    assert "<td>1</td>" in rendered
 
 
 def test_incomplete_retry_does_not_hide_completed_run():
@@ -93,7 +118,7 @@ def test_incomplete_retry_does_not_hide_completed_run():
 
     # The complete retry contributes exactly one paired observation.
     assert "<td>1</td>" in rendered
-    assert rendered.count("95% CI unavailable; fewer than 2 observations") == 4
+    assert rendered.count("95% CI unavailable; fewer than 2 sessions") == 4
     assert "No complete experiment records" not in rendered
 
 
@@ -117,8 +142,8 @@ def test_aggregates_remain_separate_across_protocol_and_scoring_versions():
     assert rendered.count('data-model="test-model"') == 2
     assert "protocol-1" in rendered and "score-1" in rendered
     assert "protocol-2" in rendered and "score-2" in rendered
-    assert "<td>20.0 (95% CI unavailable; fewer than 2 observations)</td>" in rendered
-    assert "<td>80.0 (95% CI unavailable; fewer than 2 observations)</td>" in rendered
+    assert "<td>20.0 (95% CI unavailable; fewer than 2 sessions)</td>" in rendered
+    assert "<td>80.0 (95% CI unavailable; fewer than 2 sessions)</td>" in rendered
     assert "<td>50.0 (95% CI" not in rendered
 
 
@@ -137,5 +162,5 @@ def test_incomplete_cells_do_not_enter_interval_sample():
         r"<td>(\d+\.\d) \(95% CI ([+-]?\d+\.\d) to ([+-]?\d+\.\d)\)</td>", rendered
     )
     assert baseline is not None
-    assert tuple(float(value) for value in baseline.groups()) == pytest.approx((40.0, 20.4, 59.6))
+    assert tuple(float(value) for value in baseline.groups()) == pytest.approx((40.0, -87.1, 167.1))
     assert "<td>2</td>" in rendered

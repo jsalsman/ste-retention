@@ -127,7 +127,7 @@ def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch
     # Visible copy defines uncertainty and discloses pairing and independence assumptions.
     assert b"A 95% confidence interval (95% CI)" in response.data
     assert b"Effects are calculated within each matched cell" in response.data
-    assert b"treats complete cells as independent" in response.data
+    assert b"Sessions are treated as independent" in response.data
 
 
 def test_success_copy_distinguishes_preview_from_published_research():
