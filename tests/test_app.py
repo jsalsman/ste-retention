@@ -634,6 +634,17 @@ def test_model_catalog_endpoint_serves_the_catalog_unchanged(client):
     assert calibration["low"]["usd"] <= calibration["high"]["usd"]
 
 
+def test_deepseek_v4_flash_is_a_pinned_paid_choice():
+    """Offer the dated DeepSeek V4 Flash release at its verified catalog price."""
+    spec = MODELS_BY_ID["deepseek/deepseek-v4-flash-0731"]
+    # The dated identifier is selectable; the moving alias is not.
+    assert spec.id in ALLOWED_MODELS
+    assert "~deepseek/deepseek-v4-flash-latest" not in ALLOWED_MODELS
+    # Prices match the 2026-09-25 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.00000003, 0.00000032)
+    assert not spec.free
+
+
 @pytest.mark.parametrize("free_model", [spec.id for spec in MODEL_CATALOG if spec.free])
 def test_free_models_are_accepted_for_interaction(client, module, monkeypatch, free_model):
     """Send each free catalog identifier upstream unchanged."""
