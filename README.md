@@ -59,21 +59,21 @@ The web preview is different. It scores each requested turn and permits only one
 
 ### Study size
 
-The full worker uses this generation-call formula:
+The full worker uses this logical-generation formula:
 
 ```text
 models × sessions × 4 variants × deepest probe
 ```
 
-The default web study uses one model, six sessions, four variants, and a deepest probe of turn 12. Thus, it makes 288 generation calls.
+The default web study uses one model, six sessions, four variants, and a deepest probe of turn 12. Thus, it has 288 logical generations. Each normally uses one paid provider request but can use four when all three continuation attempts are needed, for a maximum of 1,152 paid generation requests.
 
-An optional judge adds this number of calls:
+An optional judge adds this number of logical judge units:
 
 ```text
 models × sessions × 4 variants × number of probe depths
 ```
 
-The web form does not use a judge or an approved-word file. The command-line worker can use both options.
+The web form does not use a judge or an approved-word file. The command-line worker can use both options. Judge units have the same maximum of four paid provider requests each. The research safety ceiling is enforced against the combined maximum provider-request count, not the smaller logical-unit count.
 
 ### Adaptive control
 
@@ -138,13 +138,14 @@ Start the development server.
 
 Open the root page and enter an OpenRouter key. Select a model and an experiment type.
 
-For a single interaction, the server validates both the returned message text and
-the provider's finish reason. A token-limit finish returns the available text as
-plain text and labels it incomplete, so the browser warns that the displayed text
-may be truncated. Malformed provider metadata and provider failures produce a
-sanitized error without returning credentials or the provider response body.
-Preview and research runners likewise unwrap validated completions to plain text;
-they checkpoint safe partial text when a token limit ends a generation.
+For every interaction, the server validates both the returned message text and
+the provider's finish reason. Each generation allows 8,192 output tokens per call.
+After a token-limit finish, it makes as many as three bounded suffix requests and
+combines their validated text. Success requires an explicit provider `stop`; if
+that does not occur, “Try one prompt” labels the combined text incomplete, and
+preview and research runners do not score or checkpoint it as completed work.
+Malformed provider metadata and provider failures produce a sanitized error
+without returning credentials or the provider response body.
 
 The model menu currently offers Gemini 3.8 Flash, GPT-6 Sol, Claude Sonnet 5, and
 Llama 4 Maverick. These exact OpenRouter model identifiers were verified against
@@ -152,8 +153,8 @@ the provider catalog on 2026-09-24. Exact identifiers make a study more
 reproducible than moving `latest` aliases, but the catalog can change. Verify
 availability before you start a large study.
 
-* **Short preview:** This mode uses all four variants. It makes a maximum of 12 generation calls.
-* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions make 288 generation calls.
+* **Short preview:** This mode uses all four variants. It has at most 12 logical generations and 48 paid provider requests when every generation needs all three continuations.
+* **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions have 288 logical generations and at most 1,152 paid provider requests.
 
 “Try one prompt” and experiments are separate workflows. The free-form prompt is
 sent only to `/api/interact` for a single response. Short previews and full research
@@ -163,6 +164,8 @@ studies do not use that text; they select their experiment prompts from
 The server sends newline-delimited JSON (NDJSON). Each line is one valid JSON object. The server saves each paid response before it reports completion.
 
 A browser, proxy, or server timeout can stop a full study. Streaming does not extend the Cloud Run request limit. Copy the run ID. Select the same mode and settings, enter the run ID, and supply a new API key to resume.
+
+Snapshots created before durable paid-attempt accounting cannot prove how many failed provider sends occurred. They remain readable, but their full request allowance is conservatively treated as consumed, so they cannot make more paid calls. Start a new run instead of resuming such a legacy snapshot.
 
 The web application has no authentication or authorization layer. A person who knows a run ID can inspect status, resume the run, or delete the snapshot. Deletion returns a conflict while that run holds an active lease, which prevents a later checkpoint from recreating the deleted snapshot. Use a suitable deployment boundary if model text is sensitive.
 
@@ -180,21 +183,21 @@ python -m ste.research \
   --state /durable/research/RUN.json --yes
 ```
 
-The command shows 576 generation calls and 144 judge calls for this example. The `--yes` option confirms the displayed workload. It does not confirm a price estimate.
+The command shows 576 generation and 144 judge logical units for this example, plus the maximum of 2,880 paid provider requests after bounded continuations. The `--yes` option confirms this displayed workload. It does not confirm a price estimate.
 
 To resume, use the same state path and all the same configuration values. Add `--run-id` with the saved run ID. The worker rejects a changed configuration before it makes a new paid call.
 
 ## Cost
 
-The current code does not contain a pricing table. It does not calculate a currency estimate because provider prices and model identifiers can change.
+The command-line worker does not contain a pricing table or calculate a currency estimate. The web form contains a dated model-price snapshot only for its explicitly labeled rough planning range; provider prices and model identifiers can change.
 
 The old program estimated 5.92 USD for one default batch. It estimated 12 to 18 USD for a typical adaptive run. These historical values do not describe the current fixed-session worker. Do not use them as a current quote.
 
-Before a run, calculate the call count from the formulas in the design section. Check the current prices for each selected model in OpenRouter. Include the growing conversation history, output-token limit, and optional judge calls in your estimate.
+Before a run, calculate both logical units and the maximum provider-request count from the formulas in the design section. Check the current prices for each selected model in OpenRouter. Include the growing conversation history, output-token limit, optional judge units, and up to three continuation requests per unit in your estimate.
 
 The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
-The web form shows the default generation-call count before a full run. It does not show a currency estimate. The user who enters the OpenRouter key accepts the provider charges.
+The web form recalculates the logical-generation count, maximum paid provider-request count, and a rough model-specific cost range when the user changes the model, preview turns, batches, or research sessions. Prices were verified against OpenRouter's live catalog on 2026-09-25. The low range assumes one request with 500 input and 300 output tokens per logical unit; the high range assumes four requests with 8,000 input and 8,192 output tokens each. This deliberately broad range is not a quote or spending cap. Because one web session can make at most 192 provider requests, the form caps research at 5,208 sessions so the worst case stays below the 1,000,000-request server safety ceiling. The user who enters the OpenRouter key accepts the provider charges and should set a provider-side spending limit.
 
 ## The files
 
@@ -204,7 +207,7 @@ This module runs the full experiment. It also supplies the `python -m ste.resear
 
 **Configuration.** Command options set the models, sessions, probe depths, seed, timeouts, budget value, optional word list, optional judge, state path, and resume ID.
 
-**Workload confirmation.** The module calculates generation and judge call counts. It prints the counts and the configured budget value. It requires `--yes` before paid work starts.
+**Workload confirmation.** The module calculates generation and judge logical-unit counts and their combined maximum paid provider-request count. It prints those counts and the configured budget value. It requires `--yes` before paid work starts, and rejects a worst-case request count above the research safety ceiling.
 
 **One session.** The module sends one system instruction for each variant. It keeps all user and assistant messages in that variant's history. It sends the same prompt sequence to all four variants.
 

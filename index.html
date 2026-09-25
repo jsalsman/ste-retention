@@ -48,7 +48,7 @@
           <option value="preview">Short preview</option>
           <option value="research">Full research study</option>
         </select>
-        <p id="mode-help" class="help">The preview uses all four variants and makes at most 12 calls. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”</p>
+        <p id="mode-help" class="help">The preview uses all four variants, 4 logical generations, and at most 16 paid provider requests. Experiments use the predefined prompt pool, not text entered under “Try one prompt.”</p>
         <div id="preview-options">
         <label for="batches">Batches (interactive maximum 1)</label>
         <input id="batches" type="number" min="1" max="1" value="1" required>
@@ -57,13 +57,14 @@
         </div>
         <div id="research-options" hidden>
           <label for="sessions">Research sessions</label>
-          <input id="sessions" type="number" min="1" max="10000" value="6" required disabled>
-          <p class="help">The full study uses the selected model, four variants, and probes at turns 1, 6, and 12. Six sessions make 288 paid generation calls.</p>
+          <input id="sessions" type="number" min="1" max="5208" value="6" required disabled>
+          <p class="help">The full study uses the selected model, four variants, and probes at turns 1, 6, and 12. Each session uses 48 logical generations and at most 192 paid provider requests.</p>
         </div>
         <label for="resume-run-id">Resume run ID (optional)</label>
         <input id="resume-run-id" type="text" inputmode="text" pattern="[a-f0-9]{32}" maxlength="32" autocomplete="off">
         <p class="help">After a disconnect, enter the displayed run ID with the same model and controls. Completed work will not be repeated.</p>
         <button id="check-run" type="button" class="secondary">Check run status</button>
+        <p id="cost-estimate" class="help" role="status" aria-live="polite"></p>
         <button type="submit">Start experiment</button>
         <div id="experiment-status" class="status" role="status" aria-live="polite">Ready for an experiment.</div>
         <div id="experiment-result" class="result" tabindex="0">Results and a resumable run ID will appear here.</div>

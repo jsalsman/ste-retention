@@ -9,7 +9,13 @@ from flask import Flask, Response, jsonify, request, send_file, stream_with_cont
 
 from ste.experiment import ALLOWED_MODELS, UPSTREAM_TIMEOUT_SECONDS, run_experiment, validate_run
 from ste.leaderboard import render_file, render_leaderboard
-from ste.models.openrouter import IncompleteGenerationError, UpstreamError, chat
+from ste.models.openrouter import (
+    DEFAULT_MAX_TOKENS,
+    MAX_CONTINUATIONS,
+    IncompleteGenerationError,
+    UpstreamError,
+    chat,
+)
 from ste.records import RecordError
 from ste.research import ResearchConfig, load_state, new_state, parse_state, run_research
 from ste.runs.backend import LeaseUnavailableError, is_not_found
@@ -186,6 +192,20 @@ def experiment_stream():
         # The API key is held only by the surrounding request and never enters state.
         snapshots.write(state)
 
+    def account_attempt() -> None:
+        """Persist one preview provider-request reservation before transport starts."""
+        maximum = batches * turns * 4 * (MAX_CONTINUATIONS + 1)
+        paid_attempts = state.get("paid_request_attempts", 0)
+        if type(paid_attempts) is not int or paid_attempts >= maximum:
+            # Repeated resumes cannot spend beyond the workload disclosed at creation.
+            raise RuntimeError("The paid-provider request ceiling was reached.")
+        expires = lease.heartbeat()
+        state["paid_request_attempts"] = paid_attempts + 1
+        state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+        state["lease_expires_at"] = expires.isoformat()
+        # Reserve durably first; a crash may overcount but can never hide paid work.
+        snapshots.write(state)
+
     @stream_with_context
     def generate():
         """Yield exactly one terminal event even when inference fails after headers."""
@@ -200,6 +220,7 @@ def experiment_stream():
                 turns,
                 existing_records=state["records"],
                 persist=checkpoint,
+                on_attempt=account_attempt,
                 run_id=state["run_id"],
                 seed=state["seed"],
             ):
@@ -339,7 +360,7 @@ def _research_stream(data: dict, api_key: str) -> Response:
         completed = len(state["units"])
         completed_at_start = completed
         # The validated workload gives every event a stable denominator.
-        total = config.workload()["total_calls"]
+        total = config.workload()["total_units"]
         terminal = False
         try:
             # Send the resume handle before any paid worker call can fail or time out.
@@ -376,13 +397,13 @@ def _research_stream(data: dict, api_key: str) -> Response:
                         "run_id": state["run_id"],
                     }
                 else:
-                    # Every nonterminal worker event represents one newly durable call.
+                    # Every nonterminal worker event represents one newly durable unit.
                     completed += 1
                     measured = completed - completed_at_start
                     # Report persisted work, never speculative or in-flight work.
                     event = {
                         "type": "status",
-                        "message": f"Saved research call {completed} of {total}.",
+                        "message": f"Saved research logical unit {completed} of {total}.",
                         "completed": completed,
                         "total": total,
                         "elapsed_seconds": round(elapsed, 2),
@@ -473,11 +494,11 @@ def experiment_status(run_id: str):
                 config_data.get("provider_timeout", 120.0),
                 config_data.get("judge_model"),
                 config_data.get("judge_timeout", 120.0),
-                config_data.get("max_tokens", 600),
+                config_data.get("max_tokens", DEFAULT_MAX_TOKENS),
             )
             state = load_state(path, config, run_id)
             completed = len(state["units"])
-            total = config.workload()["total_calls"]
+            total = config.workload()["total_units"]
         else:
             state = load_run(EXPERIMENTS, run_id)
             completed = len(state["records"])

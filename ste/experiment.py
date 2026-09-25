@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from hashlib import sha256
 
-from ste.models.openrouter import chat_text
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, MAX_CONTINUATIONS, chat_text
 from ste.protocol import (
     ALLOWED_MODELS,
     PREVIEW_DEADLINE_SECONDS,
@@ -27,6 +27,9 @@ from ste.scoring import score_text
 MAX_BATCHES = PREVIEW_MAX_BATCHES
 MAX_TURNS = PREVIEW_MAX_TURNS
 MAX_WORK_UNITS = PREVIEW_MAX_WORK_UNITS
+# The preview's paid ceiling includes the initial request and every allowed
+# continuation for each logical unit, even though typical runs use fewer calls.
+MAX_PROVIDER_REQUESTS = MAX_WORK_UNITS * (MAX_CONTINUATIONS + 1)
 INTERACTIVE_DEADLINE_SECONDS = PREVIEW_DEADLINE_SECONDS
 UPSTREAM_TIMEOUT_SECONDS = PREVIEW_PROVIDER_TIMEOUT_SECONDS
 PROMPTS = PROMPT_POOL
@@ -42,8 +45,13 @@ def validate_run(model: object, batches: object, turns: object) -> tuple[str, in
     if type(turns) is not int or not 1 <= turns <= MAX_TURNS:
         raise ValueError(f"Turns must be between 1 and {MAX_TURNS}.")
     # Keep the explicit workload invariant visible at the boundary.
-    if batches * turns * len(VARIANTS) > MAX_WORK_UNITS:
+    logical_units = batches * turns * len(VARIANTS)
+    if logical_units > MAX_WORK_UNITS:
         raise ValueError("The requested workload exceeds the interactive limit.")
+    maximum_requests = logical_units * (MAX_CONTINUATIONS + 1)
+    if maximum_requests > MAX_PROVIDER_REQUESTS:
+        # Apply the paid-work ceiling to worst-case continuations, not typical calls.
+        raise ValueError("The requested paid-provider workload exceeds the interactive limit.")
     return model, batches, turns
 
 
@@ -57,10 +65,16 @@ def run_experiment(
     clock: Callable[[], float] = time.monotonic,
     existing_records: list[dict] | None = None,
     persist: Callable[[list[dict]], None] | None = None,
+    on_attempt: Callable[[], None] | None = None,
     run_id: str | None = None,
     seed: int = 1,
 ) -> Iterator[dict]:
-    """Yield progress while skipping saved units and checkpointing each new response."""
+    """Yield progress while skipping saved units and checkpointing each new response.
+
+    ``on_attempt`` is forwarded to the provider adapter so the web layer can
+    durably reserve paid requests independently from completed record checkpoints.
+    Injected test transports may ignore it because they make no paid calls.
+    """
     model, batches, turns = validate_run(model, batches, turns)
     total = batches * turns * len(VARIANTS)
     started = clock()
@@ -120,7 +134,14 @@ def run_experiment(
                 ]
                 # Leave room for scoring, checkpoint I/O, streaming, and deployment overhead.
                 timeout = min(UPSTREAM_TIMEOUT_SECONDS, remaining)
-                reply = request(api_key, model, messages, timeout=timeout, max_tokens=300)
+                reply = request(
+                    api_key,
+                    model,
+                    messages,
+                    timeout=timeout,
+                    max_tokens=DEFAULT_MAX_TOKENS,
+                    on_attempt=on_attempt,
+                )
                 # Context is retained within an arm, matching the retention design.
                 history.extend(
                     ({"role": "user", "content": prompt}, {"role": "assistant", "content": reply})

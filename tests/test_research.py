@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, IncompleteGenerationError
 from ste.protocol import (
     DEFAULT_RESEARCH_DEPTHS,
     PROMPT_POOL,
@@ -12,9 +13,13 @@ from ste.protocol import (
     VARIANTS,
 )
 from ste.research import (
+    MAX_RESEARCH_CALLS,
+    MAX_REQUESTS_PER_UNIT,
+    MAX_WEB_RESEARCH_SESSIONS,
     ResearchConfig,
     load_state,
     new_state,
+    parse_state,
     prompt_sequence,
     run_research,
     save_state,
@@ -44,6 +49,85 @@ def test_research_depth_cannot_exceed_non_repeating_pool():
         config.validate()
     with pytest.raises(ValueError, match="non-repeating prompt pool"):
         prompt_sequence(1, "session", len(PROMPT_POOL) + 1)
+
+
+def test_research_defaults_to_expanded_generation_token_limit():
+    """Give full studies the same substantial default output capacity as previews."""
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,))
+    # The value is persisted in run configuration, making resumed behavior reproducible.
+    assert config.max_tokens == DEFAULT_MAX_TOKENS == 8192
+    # Validation confirms the shared default is a supported positive integer limit.
+    config.validate()
+
+
+def test_workload_reports_and_enforces_maximum_provider_requests():
+    """Count every bounded continuation in paid confirmation and safety limits."""
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,), judge_model="anthropic/claude-sonnet-5")
+    workload = config.workload()
+    # Four variants create four generation and four judge checkpoint units.
+    assert workload["generation_units"] == workload["judge_units"] == 4
+    # Each unit can consume the initial call plus every bounded continuation.
+    assert workload["maximum_provider_requests"] == 8 * MAX_REQUESTS_PER_UNIT
+
+    excessive = ResearchConfig(("openai/gpt-6-sol",), 1_954, (32,))
+    assert excessive.workload()["maximum_provider_requests"] > MAX_RESEARCH_CALLS
+    # Validation applies the ceiling to paid requests rather than logical checkpoints.
+    with pytest.raises(ValueError, match="paid-request safety limit"):
+        excessive.validate()
+
+    web_limit = ResearchConfig(("openai/gpt-6-sol",), MAX_WEB_RESEARCH_SESSIONS, (1, 6, 12))
+    # The derived browser maximum is accepted, but its immediate successor is not.
+    web_limit.validate()
+    assert web_limit.workload()["maximum_provider_requests"] <= MAX_RESEARCH_CALLS
+    above_web_limit = ResearchConfig(
+        ("openai/gpt-6-sol",), MAX_WEB_RESEARCH_SESSIONS + 1, (1, 6, 12)
+    )
+    with pytest.raises(ValueError, match="paid-request safety limit"):
+        above_web_limit.validate()
+
+
+def test_failed_attempts_remain_bounded_across_resumes():
+    """Persist incomplete paid attempts so repeated resumes cannot exceed disclosure."""
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,))
+    state = new_state(config, "e" * 32)
+    persisted = []
+
+    def incomplete_request(_key, _model, _messages, **options):
+        """Consume all four local attempts, then report an incomplete generation."""
+        for _attempt in range(MAX_REQUESTS_PER_UNIT):
+            # The production adapter invokes this immediately before each provider call.
+            options["on_attempt"]()
+        # No external provider is contacted by this deterministic failure double.
+        raise IncompleteGenerationError("partial", "length")
+
+    maximum = config.workload()["maximum_provider_requests"]
+    for _resume in range(MAX_REQUESTS_PER_UNIT):
+        with pytest.raises(IncompleteGenerationError):
+            list(
+                run_research(
+                    "secret",
+                    config,
+                    state,
+                    lambda value: persisted.append(dict(value)),
+                    request=incomplete_request,
+                )
+            )
+    assert state["paid_request_attempts"] == maximum
+    # A further resume stops before its fake can represent another provider request.
+    with pytest.raises(RuntimeError, match="request ceiling"):
+        list(run_research("secret", config, state, lambda _value: None, request=incomplete_request))
+    assert state["paid_request_attempts"] == maximum
+    assert persisted[-1]["paid_request_attempts"] == maximum
+
+
+def test_legacy_research_reserves_unknown_paid_attempts():
+    """Prevent a pre-accounting research snapshot from resetting paid spend to zero."""
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,))
+    state = new_state(config, "f" * 32)
+    state.pop("paid_request_attempts")
+    # Parsing remains compatible for inspection but consumes every uncertain attempt.
+    restored = parse_state(json.dumps(state), config, state["run_id"])
+    assert restored["paid_request_attempts"] == config.workload()["maximum_provider_requests"]
 
 
 @pytest.mark.parametrize("depths", [(-1, 1), (0, 1), (1, 2.5, 3), (True, 2)])
@@ -149,7 +233,7 @@ def test_research_resumes_inside_partial_arm_without_repeating_calls(tmp_path):
     prior_calls = len(calls)
     events = list(run_research("secret", config, resumed, lambda _value: None, request=request))
     assert events[-1]["type"] == "success"
-    assert len(calls) - prior_calls == config.workload()["generation_calls"] - 1
+    assert len(calls) - prior_calls == config.workload()["generation_units"] - 1
     assert any(message["content"] == "Reply 1." for message in calls[prior_calls])
 
 

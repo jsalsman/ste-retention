@@ -27,3 +27,10 @@
 - Cache verified storage backends and deterministic missing-mount results only. Retry transient ADC, probe, and Cloud Storage API failures on later requests, and release an acquired lease when its authoritative snapshot read fails.
 - Heartbeat immediately before exception or cancellation cleanup writes. Snapshot generation fencing alone does not prove lease ownership during the gap between an expired takeover and the successor's first write.
 - Verify selectable models against OpenRouter's live catalog, and prefer exact model identifiers over moving aliases so experiment records remain reproducible.
+- Treat only an explicit OpenRouter `stop` as a complete text generation. Bounded continuation text may be shown diagnostically, but experiments must not score or checkpoint it until a stop is received.
+- Distinguish checkpointed logical work units from paid provider requests in every workload display. Apply safety ceilings to the worst-case request count, including all bounded continuation attempts.
+- Recalculate browser workload disclosures whenever a workload-defining input changes; never leave default-session figures visible for a different submitted session count.
+- Keep browser input maxima within the server's worst-case paid-request ceiling, and treat above-maximum values as invalid when calculating disclosures.
+- Persist paid provider-attempt reservations before each request and enforce their confirmed ceiling across retries and resumes; incomplete logical units do not erase spent attempts.
+- Treat legacy snapshots without durable paid-attempt counters as having consumed their full allowance; unknown failed sends make a smaller migration value unsafe.
+- Label browser cost ranges as rough estimates, update them with every model or workload change, state their assumptions, and recommend a provider-side spending limit.

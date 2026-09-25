@@ -11,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
-from ste.models.openrouter import chat_text
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, MAX_CONTINUATIONS, chat_text
 from ste.protocol import (
     ALLOWED_MODELS,
     DEFAULT_RESEARCH_DEPTHS,
@@ -24,10 +24,17 @@ from ste.protocol import (
 from ste.scoring import load_approved_words, parse_judge_score, score_text
 
 # Research limits protect unattended jobs without inheriting the web preview's
-# limits. Operators can choose smaller values and must confirm the workload.
+# limits. The paid-request ceiling includes every allowed continuation attempt,
+# while logical-unit totals remain suitable for checkpoint progress reporting.
 MAX_RESEARCH_SESSIONS = 10_000
 MAX_RESEARCH_DEPTH = 128
 MAX_RESEARCH_CALLS = 1_000_000
+MAX_REQUESTS_PER_UNIT = MAX_CONTINUATIONS + 1
+# The web study fixes one model, no judge, four variants, and the default deepest
+# turn, so this derived bound is the largest session count below the paid ceiling.
+MAX_WEB_RESEARCH_SESSIONS = MAX_RESEARCH_CALLS // (
+    len(VARIANTS) * max(DEFAULT_RESEARCH_DEPTHS) * MAX_REQUESTS_PER_UNIT
+)
 
 
 @dataclass(frozen=True)
@@ -42,7 +49,7 @@ class ResearchConfig:
     provider_timeout: float = 120.0
     judge_model: str | None = None
     judge_timeout: float = 120.0
-    max_tokens: int = 600
+    max_tokens: int = DEFAULT_MAX_TOKENS
 
     def validate(self) -> None:
         """Reject unsafe, unsupported, or internally inconsistent configuration."""
@@ -68,19 +75,32 @@ class ResearchConfig:
             raise ValueError("The judge model must be supported.")
         if self.budget_usd <= 0 or self.provider_timeout <= 0 or self.judge_timeout <= 0:
             raise ValueError("Budgets and timeouts must be positive.")
-        if self.workload()["total_calls"] > MAX_RESEARCH_CALLS:
-            raise ValueError("The research workload exceeds the safety limit.")
+        if type(self.max_tokens) is not int or self.max_tokens <= 0:
+            # A stable positive allowance is resume-critical and bounds every generation.
+            raise ValueError("The generation token limit must be a positive integer.")
+        if self.workload()["maximum_provider_requests"] > MAX_RESEARCH_CALLS:
+            # Enforce the worst case, not only the number of durable logical units.
+            raise ValueError("The research workload exceeds the paid-request safety limit.")
 
     def workload(self) -> dict[str, int]:
-        """Return generation and separately identifiable judge call counts."""
-        generation = len(self.models) * self.sessions * len(VARIANTS) * max(self.depths)
-        judges = len(self.models) * self.sessions * len(VARIANTS) * len(self.depths)
-        judges = judges if self.judge_model else 0
-        # Keeping judge calls separate makes paid confirmation meaningful.
+        """Return logical units and maximum paid provider-request counts.
+
+        Generation and judge units each normally use one provider request. A
+        token-limited response can use ``MAX_REQUESTS_PER_UNIT`` requests, so
+        safety validation and operator confirmation use the maximum values while
+        streaming progress uses logical units that correspond to checkpoints.
+        """
+        generation_units = len(self.models) * self.sessions * len(VARIANTS) * max(self.depths)
+        judge_units = len(self.models) * self.sessions * len(VARIANTS) * len(self.depths)
+        judge_units = judge_units if self.judge_model else 0
+        # Both kinds use the same bounded complete-output adapter and retry allowance.
         return {
-            "generation_calls": generation,
-            "judge_calls": judges,
-            "total_calls": generation + judges,
+            "generation_units": generation_units,
+            "judge_units": judge_units,
+            "total_units": generation_units + judge_units,
+            "maximum_generation_requests": generation_units * MAX_REQUESTS_PER_UNIT,
+            "maximum_judge_requests": judge_units * MAX_REQUESTS_PER_UNIT,
+            "maximum_provider_requests": (generation_units + judge_units) * MAX_REQUESTS_PER_UNIT,
         }
 
 
@@ -116,6 +136,8 @@ def new_state(config: ResearchConfig, run_id: str | None = None) -> dict:
         "updated_at": now,
         "units": [],
         "records": [],
+        # Paid attempts are durable separately because incomplete units have no record.
+        "paid_request_attempts": 0,
     }
 
 
@@ -158,6 +180,15 @@ def parse_state(contents: str | bytes, config: ResearchConfig, run_id: str) -> d
         {unit.get("unit_id") for unit in units if isinstance(unit, dict)}
     ) != len(units):
         raise ValueError("The research snapshot contains duplicate or malformed units.")
+    maximum_attempts = config.workload()["maximum_provider_requests"]
+    if "paid_request_attempts" not in state:
+        # Pre-accounting snapshots may hide failed sends, so conservatively consume
+        # their allowance instead of granting a fresh paid budget during resume.
+        state["paid_request_attempts"] = maximum_attempts
+    paid_attempts = state["paid_request_attempts"]
+    if type(paid_attempts) is not int or not 0 <= paid_attempts <= maximum_attempts:
+        # Never resume state that can bypass or has already exceeded its paid ceiling.
+        raise ValueError("The research snapshot has invalid paid-request accounting.")
     return state
 
 
@@ -183,6 +214,24 @@ def run_research(
     """Run or resume every arm, persisting each inference before reporting it."""
     config.validate()
     completed = {unit["unit_id"]: unit for unit in state["units"]}
+    maximum_attempts = config.workload()["maximum_provider_requests"]
+
+    def account_attempt() -> None:
+        """Reserve and persist one paid request before contacting the provider.
+
+        The durable counter spans retries and resumes, so repeated incomplete
+        generations cannot exceed the originally disclosed worst-case request
+        ceiling. Persisting first can conservatively overcount an interrupted call,
+        but it cannot conceal a request that might have reached the provider.
+        """
+        paid_attempts = state.get("paid_request_attempts", 0)
+        if type(paid_attempts) is not int or paid_attempts >= maximum_attempts:
+            # Stop before another request can exceed the confirmed workload ceiling.
+            raise RuntimeError("The paid-provider request ceiling was reached.")
+        state["paid_request_attempts"] = paid_attempts + 1
+        # This checkpoint contains no credential and precedes the external request.
+        persist(state)
+
     for model in config.models:
         for session in range(1, config.sessions + 1):
             session_id = f"{model}:{session}"
@@ -209,6 +258,7 @@ def run_research(
                             messages,
                             timeout=config.provider_timeout,
                             max_tokens=config.max_tokens,
+                            on_attempt=account_attempt,
                         )
                         unit = {
                             "unit_id": unit_id,
@@ -249,7 +299,10 @@ def run_research(
                                 config.judge_model,
                                 [{"role": "user", "content": judge_prompt}],
                                 timeout=config.judge_timeout,
-                                max_tokens=40,
+                                # JSON judging needs less output, but 256 tokens avoids
+                                # truncating valid provider wrappers before their stop.
+                                max_tokens=256,
+                                on_attempt=account_attempt,
                             )
                             judge_value = parse_judge_score(raw)
                             judge_unit = {
@@ -327,8 +380,9 @@ def main(argv: list[str] | None = None) -> int:
     state = load_state(args.state, config, args.run_id) if args.run_id else new_state(config)
     workload = config.workload()
     print(
-        f"Workload: {workload['generation_calls']} generation + "
-        f"{workload['judge_calls']} judge calls; "
+        f"Workload: {workload['generation_units']} generation + "
+        f"{workload['judge_units']} judge logical units; "
+        f"at most {workload['maximum_provider_requests']} paid provider requests; "
         f"budget cap ${config.budget_usd:.2f}."
     )
     if not args.yes:

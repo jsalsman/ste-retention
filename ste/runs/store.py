@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from ste.models.openrouter import MAX_CONTINUATIONS
 from ste.protocol import PROTOCOL_VERSION, SCHEMA_VERSION, SCORING_VERSION, VARIANTS
 from ste.runs.backend import (
     LeaseUnavailableError,
@@ -65,6 +66,8 @@ def create_run(
         "created_at": now,
         "updated_at": now,
         "records": [],
+        # Failed or incomplete requests still count toward this resumable paid ceiling.
+        "paid_request_attempts": 0,
     }
     # The caller acquires a lease before conditionally creating this random run ID.
     return state
@@ -110,6 +113,15 @@ def parse_run(contents: str | bytes, run_id: str) -> dict:
         raise RunStoreError("The saved experiment run has an invalid status.")
     if type(state["batches"]) is not int or type(state["turns"]) is not int:
         raise RunStoreError("The saved experiment run has invalid settings.")
+    maximum_attempts = state["batches"] * state["turns"] * len(VARIANTS) * (MAX_CONTINUATIONS + 1)
+    if "paid_request_attempts" not in state:
+        # Historical snapshots cannot prove how many failed sends occurred. Reserve
+        # their full allowance so resumption cannot silently reset paid accounting.
+        state["paid_request_attempts"] = maximum_attempts
+    paid_attempts = state["paid_request_attempts"]
+    if type(paid_attempts) is not int or not 0 <= paid_attempts <= maximum_attempts:
+        # Resumed previews must not reset or exceed their disclosed provider requests.
+        raise RunStoreError("The saved experiment run has invalid paid-request accounting.")
     seen = set()
     for record in state["records"]:
         # Validate the fields needed to reconstruct context before opening a stream.
