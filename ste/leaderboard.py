@@ -72,15 +72,20 @@ def _mean_interval(values: tuple[float, ...]) -> tuple[float, float | None, floa
 
 
 def _estimate_cell(summary: tuple[float, float | None, float | None], *, signed: bool) -> str:
-    """Format one estimate and its associated interval as unambiguous table text."""
+    """Format one estimate and its 95% CI half-width as compact ``mean ± half`` text.
+
+    The interval is symmetric around the Student-t mean, so the half-width fully
+    describes it. The uncertainty section explains the notation once, which keeps
+    column headers and cells short.
+    """
     mean, lower, upper = summary
     # Contrasts always show a sign; baseline scores retain their familiar score format.
-    format_spec = "+.1f" if signed else ".1f"
-    estimate = format(mean, format_spec)
+    estimate = format(mean, "+.1f" if signed else ".1f")
     if lower is None or upper is None:
-        # The visible unavailable label prevents a one-cell row implying zero uncertainty.
-        return f"{estimate} (95% CI unavailable; fewer than 2 sessions)"
-    return f"{estimate} (95% CI {format(lower, format_spec)} to {format(upper, format_spec)})"
+        # The visible n/a prevents a one-session row implying zero uncertainty.
+        return f"{estimate} ± n/a"
+    # Half-widths are unsigned distances, even when the estimate itself is signed.
+    return f"{estimate} ± {format(upper - mean, '.1f')}"
 
 
 def _elapsed_cell(run_seconds: dict[object, float], expected_runs: set[object]) -> str:
@@ -98,6 +103,132 @@ def _elapsed_cell(run_seconds: dict[object, float], expected_runs: set[object]) 
     if minutes:
         return f"{minutes}m {seconds}s"
     return f"{seconds}s"
+
+
+# Chart geometry is in SVG user units; the viewBox scales it to the container width.
+# Each model gets a label line above its dumbbell so long identifiers never need a
+# fixed left gutter, which keeps the figure legible on phone-width screens.
+CHART_WIDTH = 800
+CHART_PAD_X = 16
+CHART_PAD_TOP = 8
+CHART_ROW_HEIGHT = 52
+CHART_AXIS_HEIGHT = 34
+# Compliance scores are bounded, so the shared axis covers the full 0-100 scale.
+CHART_TICKS = (0, 25, 50, 75, 100)
+
+
+def _chart_x(score: float) -> float:
+    """Map a score to a clamped, validated SVG x coordinate on the 0-100 axis."""
+    # Every chart coordinate passes through here, so non-finite values never reach SVG.
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        raise ValueError("Leaderboard chart values must be numeric.")
+    if not math.isfinite(score):
+        raise ValueError("Leaderboard chart values must be finite.")
+    # Wide small-sample intervals can extend past the score scale; clamp them to the plot.
+    clamped = min(100.0, max(0.0, float(score)))
+    return CHART_PAD_X + clamped / 100 * (CHART_WIDTH - 2 * CHART_PAD_X)
+
+
+def _chart_band(summary: tuple[float, float | None, float | None], y: float, css_class: str) -> str:
+    """Return one translucent 95% CI band, with edge ticks where it leaves the axis."""
+    _mean, lower, upper = summary
+    if lower is None or upper is None:
+        # A single session has no interval, so only its point marker is drawn.
+        return ""
+    left, right = _chart_x(lower), _chart_x(upper)
+    # Thin rounded bands stay behind the markers and read as uncertainty, not data bars.
+    band = (
+        f'<rect class="band {css_class}" x="{left:.2f}" y="{y - 2.5:.2f}" '
+        f'width="{max(right - left, 1):.2f}" height="5" rx="2.5"/>'
+    )
+    # Small chevrons disclose that the interval continues beyond the visible scale.
+    if lower < 0:
+        band += (
+            f'<path class="clip {css_class}" d="M{left + 6:.2f} {y - 5:.2f} '
+            f'L{left:.2f} {y:.2f} L{left + 6:.2f} {y + 5:.2f}"/>'
+        )
+    if upper > 100:
+        band += (
+            f'<path class="clip {css_class}" d="M{right - 6:.2f} {y - 5:.2f} '
+            f'L{right:.2f} {y:.2f} L{right - 6:.2f} {y + 5:.2f}"/>'
+        )
+    return band
+
+
+def _render_chart(
+    chart_rows: list[tuple[int, str, tuple, tuple]],
+) -> str:
+    """Return a dumbbell chart linking each row's bare baseline to its named score.
+
+    ``chart_rows`` holds ``(rank, model, named_summary, bare_summary)`` tuples in table
+    order. Each summary is ``(mean, lower, upper)`` from :func:`_mean_interval`. The
+    connecting line shows the named-minus-bare change; translucent bands show each
+    mean's 95% CI. The table below remains the full accessible data view.
+    """
+    if not chart_rows:
+        # The table already carries the empty-state message, so no empty axis is drawn.
+        return ""
+    height = CHART_PAD_TOP + len(chart_rows) * CHART_ROW_HEIGHT + CHART_AXIS_HEIGHT
+    plot_bottom = height - CHART_AXIS_HEIGHT
+    # Recessive gridlines and tick labels share one axis for both series.
+    grid = "".join(
+        f'<line class="grid" x1="{_chart_x(tick):.2f}" y1="{CHART_PAD_TOP}" '
+        f'x2="{_chart_x(tick):.2f}" y2="{plot_bottom}"/>'
+        f'<text class="tick" x="{_chart_x(tick):.2f}" y="{plot_bottom + 20}" '
+        f'text-anchor="{"start" if tick == 0 else "end" if tick == 100 else "middle"}">'
+        f"{tick}</text>"
+        for tick in CHART_TICKS
+    )
+    rows = []
+    for index, (rank, model, named, bare) in enumerate(chart_rows):
+        top = CHART_PAD_TOP + index * CHART_ROW_HEIGHT
+        # Label text sits above the dumbbell; model names were escaped by the caller.
+        label_y, mark_y = top + 17, top + 36
+        named_x, bare_x = _chart_x(named[0]), _chart_x(bare[0])
+        # Native SVG titles provide the hover readout without client-side script.
+        tooltip = html.escape(
+            f"{rank}. {model}: bare {bare[0]:.1f}, named {named[0]:.1f} "
+            f"({named[0] - bare[0]:+.1f})",
+            quote=False,
+        )
+        rows.append(
+            f'<g class="dumbbell"><title>{tooltip}</title>'
+            # A transparent hit target makes the whole row hoverable, not just the marks.
+            f'<rect class="hit" x="0" y="{top}" width="{CHART_WIDTH}" '
+            f'height="{CHART_ROW_HEIGHT}"/>'
+            f'<text class="label" x="{CHART_PAD_X}" y="{label_y}">'
+            f'<tspan class="rank">{rank}.</tspan> {html.escape(model, quote=False)}</text>'
+            # Bands render first so the connector and markers stay crisp above them.
+            f"{_chart_band(bare, mark_y - 4, 'bare')}{_chart_band(named, mark_y + 4, 'named')}"
+            f'<line class="connector" x1="{bare_x:.2f}" y1="{mark_y}" '
+            f'x2="{named_x:.2f}" y2="{mark_y}"/>'
+            # Hollow versus filled markers keep the series distinct without color.
+            f'<circle class="point bare" cx="{bare_x:.2f}" cy="{mark_y}" r="5"/>'
+            f'<circle class="point named" cx="{named_x:.2f}" cy="{mark_y}" r="5.5"/></g>'
+        )
+    # The legend is HTML so its text wraps and inherits page typography.
+    legend = (
+        '<ul class="chart-legend">'
+        '<li><span class="swatch bare" aria-hidden="true"></span>Bare baseline</li>'
+        '<li><span class="swatch named" aria-hidden="true"></span>Named without rules</li>'
+        '<li><span class="swatch band" aria-hidden="true"></span>95% confidence interval</li>'
+        "</ul>"
+    )
+    return (
+        '<section class="leaderboard-chart" aria-labelledby="chart-title">'
+        '<div class="section-heading"><p class="eyebrow">At a glance</p>'
+        '<h2 id="chart-title">Naming versus bare baseline</h2></div>'
+        # The summary sentence gives screen-reader users the chart's purpose up front.
+        '<p id="chart-summary">Each line joins a model\'s bare-prompt mean compliance score to '
+        "its mean when ASD-STE100 is named without rules. Shaded bands show 95% confidence "
+        "intervals; chevrons mark bands that extend past the 0 to 100 scale. The table below "
+        f"lists the exact values.</p>{legend}"
+        # Like the table, a focusable scroll region keeps narrow screens legible.
+        '<div class="chart-scroll" tabindex="0" aria-label="Scrollable naming versus bare chart">'
+        f'<svg class="dumbbell-chart" viewBox="0 0 {CHART_WIDTH} {height}" role="img" '
+        'aria-labelledby="chart-title" aria-describedby="chart-summary" '
+        f'preserveAspectRatio="xMidYMin meet">{grid}{"".join(rows)}</svg></div></section>'
+    )
 
 
 def _render_explanation() -> tuple[str, str]:
@@ -130,6 +261,10 @@ def _render_explanation() -> tuple[str, str]:
         "neither the range of individual scores nor a 95% probability that the fixed population "
         "effect lies inside this observed interval. Interpret estimates and uncertainty together, "
         "rather than reducing them to statistically significant or not significant.</p>"
+        # The table writes intervals compactly, so the notation is defined once here.
+        "<p>In the leaderboard table, each value is written as a mean ± the half-width of its "
+        "95% CI, so the interval runs from the mean minus that amount to the mean plus it. "
+        "± n/a marks rows with fewer than 2 sessions, which cannot support an interval.</p>"
         # State cell eligibility before describing the later clustering operation.
         "<p>Only complete four-arm research cells matched within run, model, session, depth, "
         "protocol version, and scoring version are included; previews and incomplete runs are "
@@ -155,14 +290,15 @@ def _render_table(rows: list[str]) -> str:
         # Name the scroll region independently from the table caption.
         'aria-label="Scrollable experiment results table"><table>'
         # The caption gives the unit and interval type before users traverse columns.
-        "<caption>Mean compliance scores and paired score-point effects with two-sided 95% "
-        "confidence intervals.</caption>"
+        "<caption>Mean compliance scores and paired score-point effects, each ± its two-sided "
+        '95% confidence interval half-width (see <a href="#uncertainty">Understanding '
+        "uncertainty</a>).</caption>"
         # Compatibility columns explain why the same model can occupy multiple rows.
         "<thead><tr><th>Rank</th><th>Model</th>"
-        "<th>Named without rules, mean and 95% CI</th>"
-        # Each estimate header explicitly promises its accompanying interval.
-        "<th>Bare baseline, mean and 95% CI</th><th>Rule effect, mean and 95% CI</th>"
-        "<th>Naming effect, mean and 95% CI</th><th>Interaction, mean and 95% CI</th>"
+        "<th>Named without rules, mean ± 95% CI</th>"
+        # The first metric header states the notation once; the rest stay compact.
+        "<th>Bare baseline</th><th>Rule effect</th>"
+        "<th>Naming effect</th><th>Interaction</th>"
         # Count the independent clustered units rather than the underlying depth cells.
         "<th>Paired sessions</th><th>Run elapsed</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
@@ -258,6 +394,8 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         grouped.setdefault(group_key, []).append(session_summary)
         grouped_runs.setdefault(group_key, set()).add(_run_id)
     rows = []
+    # Chart rows mirror table order so rank labels agree across both views.
+    chart_rows = []
     summaries_by_group = {
         key: [_mean_interval(values) for values in zip(*contrasts, strict=True)]
         for key, contrasts in grouped.items()
@@ -281,6 +419,8 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         cells = [
             _estimate_cell(summary, signed=index > 1) for index, summary in enumerate(summaries)
         ]
+        # The chart receives raw text; it escapes model names itself for SVG output.
+        chart_rows.append((rank, model, summaries[0], summaries[1]))
         rows.append(
             f'<tr data-model="{safe_model}" data-protocol="{safe_protocol}" '
             f'data-scoring="{safe_scoring}">'
@@ -305,6 +445,8 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         '<header class="leaderboard-hero"><p class="eyebrow">Research dashboard</p>'
         f'<h1>{html.escape(label)}</h1><p class="leaderboard-intro">Compare controlled-language '
         "prompt strategies with paired effects and confidence intervals.</p></header>"
+        # The overview chart leads the page; the detailed table follows the definitions.
+        f"{_render_chart(chart_rows)}"
         f'{experiment}<section class="leaderboard-results" aria-labelledby="results-title">'
         '<div class="section-heading"><p class="eyebrow">Measured outcomes</p>'
         '<h2 id="results-title">Leaderboard</h2></div>'

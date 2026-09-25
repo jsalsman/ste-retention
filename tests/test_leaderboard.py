@@ -75,18 +75,11 @@ def test_intervals_use_complete_cell_baselines_and_paired_effects():
     rendered = render_leaderboard(records)
 
     # Parse every estimate/limit so assertions verify numeric results, not loose substrings.
-    cells = re.findall(
-        r"<td>([+-]?\d+\.\d) \(95% CI ([+-]?\d+\.\d) to ([+-]?\d+\.\d)\)</td>", rendered
-    )
+    cells = re.findall(r"<td>([+-]?\d+\.\d) ± (\d+\.\d)</td>", rendered)
     numeric = [tuple(float(value) for value in cell) for cell in cells]
+    # Half-widths equal the former upper limits minus each mean.
     assert numeric == pytest.approx(
-        [
-            (44.5, -76.2, 165.2),
-            (50.0, -77.1, 177.1),
-            (6.0, -13.1, 25.1),
-            (-7.5, -7.5, -7.5),
-            (-4.0, -16.7, 8.7),
-        ]
+        [(44.5, 120.7), (50.0, 127.1), (6.0, 19.1), (-7.5, 0.0), (-4.0, 12.7)]
     )
     assert "<td>2</td>" in rendered
 
@@ -113,7 +106,7 @@ def test_repeated_depths_are_clustered_within_run_session():
     rendered = render_leaderboard(records)
 
     # The session mean remains 50, but dependent depths do not create a variance estimate.
-    assert "50.0 (95% CI unavailable; fewer than 2 sessions)" in rendered
+    assert "<td>50.0 ± n/a</td>" in rendered
     assert "<th>Paired sessions</th>" in rendered
     assert "<td>1</td>" in rendered
 
@@ -131,7 +124,7 @@ def test_incomplete_retry_does_not_hide_completed_run():
 
     # The complete retry contributes exactly one paired observation.
     assert "<td>1</td>" in rendered
-    assert rendered.count("95% CI unavailable; fewer than 2 sessions") == 5
+    assert rendered.count(" ± n/a</td>") == 5
     assert "No complete experiment records" not in rendered
 
 
@@ -155,9 +148,9 @@ def test_aggregates_remain_separate_across_protocol_and_scoring_versions():
     assert rendered.count('data-model="test-model"') == 2
     assert "protocol-1" in rendered and "score-1" in rendered
     assert "protocol-2" in rendered and "score-2" in rendered
-    assert "<td>20.0 (95% CI unavailable; fewer than 2 sessions)</td>" in rendered
-    assert "<td>80.0 (95% CI unavailable; fewer than 2 sessions)</td>" in rendered
-    assert "<td>50.0 (95% CI" not in rendered
+    assert "<td>20.0 ± n/a</td>" in rendered
+    assert "<td>80.0 ± n/a</td>" in rendered
+    assert "<td>50.0 ±" not in rendered
 
 
 def test_incomplete_cells_do_not_enter_interval_sample():
@@ -171,11 +164,9 @@ def test_incomplete_cells_do_not_enter_interval_sample():
 
     rendered = render_leaderboard(records)
 
-    baseline = re.search(
-        r"<td>(\d+\.\d) \(95% CI ([+-]?\d+\.\d) to ([+-]?\d+\.\d)\)</td>", rendered
-    )
+    baseline = re.search(r"<td>(\d+\.\d) ± (\d+\.\d)</td>", rendered)
     assert baseline is not None
-    assert tuple(float(value) for value in baseline.groups()) == pytest.approx((40.0, -87.1, 167.1))
+    assert tuple(float(value) for value in baseline.groups()) == pytest.approx((40.0, 127.1))
     assert "<td>2</td>" in rendered
 
 
@@ -208,3 +199,50 @@ def test_rows_rank_by_named_score_without_rules_and_show_runtime():
     assert "<th>Protocol version</th>" not in rendered
     assert "<th>Scoring version</th>" not in rendered
     assert "<td>2m 0s</td>" in rendered
+
+
+def test_ci_notation_appears_once_in_headers_and_is_explained():
+    """Keep headers compact while defining the ± notation in the uncertainty section."""
+    rendered = render_leaderboard([])
+
+    # Only the first metric header names the interval; the others are bare labels.
+    assert rendered.count("<th>Named without rules, mean ± 95% CI</th>") == 1
+    assert "<th>Bare baseline</th>" in rendered
+    assert "mean and 95% CI" not in rendered
+    uncertainty = rendered[rendered.index('id="uncertainty"') :]
+    assert "half-width of its 95% CI" in uncertainty
+
+
+def test_chart_leads_page_and_escapes_model_names():
+    """Draw one dumbbell per row above the table, escaping names and clamping limits."""
+    # Two sessions give a finite but very wide interval that must be clamped to 0-100.
+    records = []
+    for session, (bare, named) in enumerate(((10, 30), (90, 95)), start=1):
+        for variant, score in (
+            ("bare", bare),
+            ("rules", bare),
+            ("named", named),
+            ("named_rules", named),
+        ):
+            record = _arm("run", variant, score, session=session)
+            record["model"] = "<script>x</script>"
+            records.append(record)
+
+    rendered = render_leaderboard(records)
+
+    chart = rendered[
+        rendered.index('<section class="leaderboard-chart"') : rendered.index("</svg>")
+    ]
+    assert rendered.index("leaderboard-chart") < rendered.index('id="results-title"')
+    assert chart.count('class="dumbbell"') == 1
+    assert "<script>" not in rendered
+    assert "&lt;script&gt;x&lt;/script&gt;" in chart
+    # Clamped intervals are disclosed with chevrons, and no coordinate leaves the plot.
+    assert 'class="clip bare"' in chart
+    xs = [float(value) for value in re.findall(r' (?:x|cx|x1|x2)="(-?[\d.]+)"', chart)]
+    assert xs and all(0 <= value <= 800 for value in xs)
+
+
+def test_chart_omitted_without_rows():
+    """Leave only the table empty state when no complete records exist."""
+    assert "leaderboard-chart" not in render_leaderboard([])
