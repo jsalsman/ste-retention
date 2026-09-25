@@ -50,6 +50,8 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec("openai/gpt-5.6-luna", "GPT-5.6 Luna", 0.0000002, 0.0000012),
     ModelSpec("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", 0.000001, 0.000005),
     ModelSpec("meta-llama/llama-4-maverick", "Llama 4 Maverick", 0.0000001875, 0.0000006525),
+    # Dated DeepSeek release, preferred over the moving ~deepseek-v4-flash-latest alias.
+    ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 0.00000003, 0.00000032),
     # Free variants have zero token prices but stricter provider request limits.
     ModelSpec("nvidia/nemotron-3-ultra-550b-a55b:free", "Nemotron 3 Ultra (free)", 0.0, 0.0),
     ModelSpec("nvidia/nemotron-3.5-lightning:free", "Nemotron 3.5 Lightning (free)", 0.0, 0.0),

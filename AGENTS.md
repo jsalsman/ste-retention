@@ -29,7 +29,7 @@
 - Heartbeat immediately before exception or cancellation cleanup writes. Snapshot generation fencing alone does not prove lease ownership during the gap between an expired takeover and the successor's first write.
 - Verify selectable models against OpenRouter's live catalog, and prefer exact model identifiers over moving aliases so experiment records remain reproducible.
 - `ste/models/catalog.py` is the only place that lists selectable model identifiers, labels, and prices. Server validation derives `ALLOWED_MODELS` from it, and the browser builds its menu and cost estimate from `GET /api/models`; never duplicate identifiers or prices in markup, script, or other modules.
-- Selectable models include `openai/gpt-5.6-luna`, `anthropic/claude-haiku-4.5`, and seven zero-priced `:free` variants, verified with the model-price catalog on 2026-09-25; historical persisted model labels must remain unchanged.
+- Selectable models include `openai/gpt-5.6-luna`, `anthropic/claude-haiku-4.5`, `deepseek/deepseek-v4-flash-0731`, and seven zero-priced `:free` variants, verified with the model-price catalog on 2026-09-25; historical persisted model labels must remain unchanged.
 - Free variants are rate limited by OpenRouter; show rate-limit guidance instead of a dollar range for them, and keep studies on them resumable.
 - Treat only an explicit OpenRouter `stop` as a complete text generation. Bounded continuation text may be shown diagnostically, but experiments must not score or checkpoint it until a stop is received.
 - Distinguish checkpointed logical work units from paid provider requests in every workload display. Apply safety ceilings to the worst-case request count, including all bounded continuation attempts.
