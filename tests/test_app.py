@@ -104,7 +104,10 @@ def test_static_page_contract():
 def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch):
     """Give a helpful absence and escape external model names when data exists."""
     monkeypatch.setattr(module, "RECORDS", tmp_path / "missing.jsonl")
-    assert client.get("/leaderboard").status_code == 404
+    missing = client.get("/leaderboard")
+    assert missing.status_code == 404
+    assert b"No completed research results" in missing.data
+    assert b"Short previews" in missing.data
     path = tmp_path / "records.jsonl"
     records = [
         {"session": 1, "model": "<x>", "variant": variant, "depth": 1, "score": score}
@@ -117,6 +120,14 @@ def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch
     assert b"&lt;x&gt;" in response.data and b"<x>" not in response.data
     assert b"Rule effect" in response.data and b"+15.0" in response.data
     assert b"Naming effect" in response.data and b"+25.0" in response.data
+
+
+def test_success_copy_distinguishes_preview_from_published_research():
+    """Do not direct a completed short preview to a research-only leaderboard."""
+    script = (ROOT / "static" / "app.js").read_text()
+    # Both terminal messages share one branch but explain the selected mode accurately.
+    assert "This short preview is not published on the research leaderboard." in script
+    assert "Open the leaderboard to view this completed research run." in script
 
 
 def test_interaction_validation_and_mocked_success(client, module, monkeypatch):

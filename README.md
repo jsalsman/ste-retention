@@ -219,7 +219,7 @@ This module runs the full experiment. It also supplies the `python -m ste.resear
 
 This module runs the short web preview. It limits synchronous work to one batch, three turns, and 12 units. It stops before the deployment request limit and uses short provider timeouts.
 
-Preview records have `run_mode` set to `preview`. The normal leaderboard does not combine them with research data.
+Preview records have `run_mode` set to `preview`. The normal leaderboard does not combine them with research data. After a preview finishes, the browser reports that distinction instead of directing the user to a leaderboard that deliberately excludes the saved preview.
 
 ### `ste/scoring.py`
 

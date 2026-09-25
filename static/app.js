@@ -168,7 +168,14 @@
     }
     // ETA stays textual and approximate; the interface intentionally has no progress bar.
     overlayEta.textContent = Number.isFinite(event.eta_seconds) ? `Approximately ${event.eta_seconds} seconds remaining.` : "Estimating time remaining…";
-    if (event.type === "success") result.textContent = `Run ID: ${event.run_id}\nCompleted ${event.total} durable work units. Open the leaderboard to view completed runs.`;
+    if (event.type === "success") {
+      // Preview snapshots remain resumable evidence, but only research records are published.
+      const destination = runMode.value === "research"
+        ? "Open the leaderboard to view this completed research run."
+        : "This short preview is not published on the research leaderboard.";
+      // Keep the durable count and resume handle useful for either experiment mode.
+      result.textContent = `Run ID: ${event.run_id}\nCompleted ${event.total} durable work units. ${destination}`;
+    }
     if (event.type === "error") throw new Error("Stream reported an error.");
     return event.type === "success" || event.type === "error";
   }
