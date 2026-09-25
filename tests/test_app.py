@@ -85,6 +85,8 @@ def test_static_page_contract():
     prompt_distinction = "Experiments use the predefined prompt pool, not text entered under"
     assert prompt_distinction in page
     assert 'aria-live="polite"' in page
+    assert "Services allow at most 60 minutes" in page
+    assert "Cloud Run Job for a six-hour unattended study" in page
     overlay = page.split('id="loading-overlay"', 1)[1]
     assert 'id="cancel"' in overlay and page.count('id="cancel"') == 1
     assert "{{" not in page and "progress" not in page.lower()

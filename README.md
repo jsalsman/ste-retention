@@ -165,7 +165,25 @@ studies do not use that text; they select their experiment prompts from
 
 The server sends newline-delimited JSON (NDJSON). Each line is one valid JSON object. The server saves each paid response before it reports completion.
 
-A browser, proxy, or server timeout can stop a full study. Streaming does not extend the Cloud Run request limit. Copy the run ID. Select the same mode and settings, enter the run ID, and supply a new API key to resume.
+A browser, proxy, or server timeout can stop a full study. Cloud Run applies its
+service request timeout to the complete request: keeping the window open and
+receiving streamed logical-unit or ETA events does not restart that deadline. The
+Cloud Run service timeout is deployment configuration, not an application value;
+inspect it with `gcloud run services describe SERVICE --region REGION` and update it
+with `gcloud run services update SERVICE --region REGION --timeout 3600`. Cloud Run
+services permit at most 3,600 seconds, so they cannot accept a 21,600-second request.
+
+The 120-second `provider_timeout` and `judge_timeout` values in research snapshots
+instead bound each individual OpenRouter operation. They do not impose a
+120-second lifetime on the whole streamed study. If the deployed service has a
+120-second request timeout, that external deadline is the likely cause of a stream
+ending at two minutes even while progress was arriving. Copy the run ID and resume
+with the same mode and settings after a service timeout.
+
+For an uninterrupted six-hour allowance, deploy the CLI worker as a Cloud Run Job
+and set its task timeout with `gcloud run jobs update JOB --region REGION
+--task-timeout 21600s`. Jobs are the unattended execution path; the browser stream
+remains the resumable interactive path.
 
 Snapshots created before durable paid-attempt accounting cannot prove how many failed provider sends occurred. They remain readable, but their full request allowance is conservatively treated as consumed, so they cannot make more paid calls. Start a new run instead of resuming such a legacy snapshot.
 
