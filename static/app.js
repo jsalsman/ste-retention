@@ -372,6 +372,8 @@
     status.textContent = event.message || "Experiment update received.";
     overlayMessage.textContent = status.textContent;
     if (typeof event.run_id === "string") {
+      // A different handle invalidates any status checked for the previous run ID.
+      if (resume.value.trim() !== event.run_id) clearRunStatus();
       // Keep the safe identifier visible so a refresh or disconnect can be resumed manually.
       resume.value = event.run_id;
       result.textContent = `Run ID: ${event.run_id}`;
@@ -422,6 +424,8 @@
     // Capture mode before any asynchronous work so later UI changes cannot relabel the run.
     const submittedMode = runMode.value;
     controller = new AbortController();
+    // A new request supersedes any earlier heartbeat check shown beside the button.
+    clearRunStatus();
     setRunning(true);
     try {
       const resume = document.querySelector("#resume-run-id").value.trim();
@@ -444,6 +448,15 @@
     }
   }
 
+  /**
+   * Remove any displayed run-status check so it cannot describe a different run ID.
+   * Called when the resume handle changes or a new experiment request begins.
+   */
+  function clearRunStatus() {
+    // Empty text keeps the live region present without announcing stale details.
+    document.querySelector("#run-status").textContent = "";
+  }
+
   /** Query safe heartbeat metadata and announce whether a persisted run is active or stalled. */
   async function checkRunStatus() {
     const runId = document.querySelector("#resume-run-id").value.trim();
@@ -459,9 +472,13 @@
       const response = await fetch(`/api/experiments/${encodeURIComponent(runId)}/status`, {headers:{"Accept":"application/json"}});
       const data = await response.json();
       if (!response.ok) throw new Error("Status lookup failed.");
+      // Discard a late response if the handle changed while the lookup was in flight.
+      if (document.querySelector("#resume-run-id").value.trim() !== runId) return;
       // Only fixed server status and numeric counts are rendered, always through textContent.
       status.textContent = `Run is ${data.liveness}; ${data.completed} of ${data.total} work units are durable.`;
     } catch (_error) {
+      // Report failure only while the checked handle is still the one entered.
+      if (document.querySelector("#resume-run-id").value.trim() !== runId) return;
       status.textContent = "The saved run status is unavailable.";
     }
   }
@@ -476,6 +493,8 @@
   }
   cancel.addEventListener("click", () => controller?.abort());
   checkRun.addEventListener("click", checkRunStatus);
+  // Editing or clearing the handle invalidates any previously checked status.
+  document.querySelector("#resume-run-id").addEventListener("input", clearRunStatus);
   showMode();
   // The menu arrives asynchronously; showMode() already rendered neutral cost copy.
   loadModels();
