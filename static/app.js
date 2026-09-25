@@ -149,13 +149,32 @@
     } catch (error) {
       status.textContent = error.name === "AbortError" ? "Request cancelled." : "The request could not be completed.";
       result.textContent = "No response is available.";
-    } finally {
-      key.value = "";
     }
   }
 
-  /** Apply one validated NDJSON progress object to accessible status regions. */
-  function showEvent(event) {
+  /** Format validated preview records as inert, readable completion details.
+   *
+   * Invalid record fields are omitted rather than interpolated into a misleading
+   * result. Model-generated response text remains safe because the caller assigns
+   * the returned string with `textContent`, never HTML parsing.
+   */
+  function formatPreviewResults(records) {
+    if (!Array.isArray(records)) return "Preview results are unavailable.";
+    const labels = {bare:"Bare", rules:"Rules", named:"Named", named_rules:"Named + rules"};
+    const sections = [];
+    for (const record of records) {
+      // Validate every displayed coordinate and score instead of trusting stream data.
+      const validNumber = Number.isInteger(record?.session) && Number.isInteger(record?.depth) &&
+        Number.isFinite(record?.score) && record.score >= 0 && record.score <= 100;
+      if (!validNumber || !labels[record.variant] || typeof record.text !== "string") continue;
+      // Plain-text headings keep long model responses distinct and keyboard-readable.
+      sections.push(`${labels[record.variant]} — batch ${record.session}, turn ${record.depth} — score ${record.score.toFixed(1)}\n${record.text}`);
+    }
+    return sections.length ? `Preview results\n\n${sections.join("\n\n")}` : "Preview results are unavailable.";
+  }
+
+  /** Apply one validated NDJSON progress object for the mode actually submitted. */
+  function showEvent(event, submittedMode) {
     const status = document.querySelector("#experiment-status");
     const resume = document.querySelector("#resume-run-id");
     const result = document.querySelector("#experiment-result");
@@ -166,15 +185,28 @@
       resume.value = event.run_id;
       result.textContent = `Run ID: ${event.run_id}`;
     }
+    // Convert the server's measured seconds to a readable minute estimate at display time.
+    const etaMinutes = Number.isFinite(event.eta_seconds) && event.eta_seconds >= 0
+      ? (event.eta_seconds / 60).toFixed(1)
+      : null;
     // ETA stays textual and approximate; the interface intentionally has no progress bar.
-    overlayEta.textContent = Number.isFinite(event.eta_seconds) ? `Approximately ${event.eta_seconds} seconds remaining.` : "Estimating time remaining…";
-    if (event.type === "success") result.textContent = `Run ID: ${event.run_id}\nCompleted ${event.total} durable work units. Open the leaderboard to view completed runs.`;
+    overlayEta.textContent = etaMinutes === null
+      ? "Estimating time remaining…"
+      : `Approximately ${etaMinutes} minutes remaining.`;
+    if (event.type === "success") {
+      // Preview snapshots remain resumable evidence, but only research records are published.
+      const destination = submittedMode === "research"
+        ? "Open the leaderboard to view this completed research run."
+        : `This short preview is not published on the research leaderboard.\n\n${formatPreviewResults(event.records)}`;
+      // Keep the durable count and resume handle useful for either experiment mode.
+      result.textContent = `Run ID: ${event.run_id}\nCompleted ${event.total} durable work units. ${destination}`;
+    }
     if (event.type === "error") throw new Error("Stream reported an error.");
     return event.type === "success" || event.type === "error";
   }
 
-  /** Parse arbitrary stream chunks with a retained partial-line buffer. */
-  async function consumeStream(response) {
+  /** Parse arbitrary stream chunks while retaining the submitted experiment mode. */
+  async function consumeStream(response, submittedMode) {
     if (!response.ok || !response.body) throw new Error("Streaming is unavailable.");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -186,35 +218,36 @@
       // Keep the final incomplete record until the next network chunk.
       const lines = buffer.split("\n");
       buffer = lines.pop();
-      for (const line of lines) if (line.trim()) terminal = showEvent(JSON.parse(line)) || terminal;
+      for (const line of lines) if (line.trim()) terminal = showEvent(JSON.parse(line), submittedMode) || terminal;
       if (done) break;
     }
-    if (buffer.trim()) terminal = showEvent(JSON.parse(buffer)) || terminal;
+    if (buffer.trim()) terminal = showEvent(JSON.parse(buffer), submittedMode) || terminal;
     if (!terminal) throw new Error("The stream closed before a terminal event.");
   }
 
   /** Start a bounded stream and always recover controls on every terminal path. */
   async function startExperiment(event) {
     event.preventDefault();
+    // Capture mode before any asynchronous work so later UI changes cannot relabel the run.
+    const submittedMode = runMode.value;
     controller = new AbortController();
     setRunning(true);
     try {
       const resume = document.querySelector("#resume-run-id").value.trim();
       // The run ID is safe metadata; the credential remains confined to this request body.
-      const body = {api_key:credential(), run_mode:runMode.value, model:model.value, resume_run_id:resume || null};
+      const body = {api_key:credential(), run_mode:submittedMode, model:model.value, resume_run_id:resume || null};
       // Each mode sends only the settings that define that saved run.
-      if (runMode.value === "research") body.sessions = Number(document.querySelector("#sessions").value);
+      if (submittedMode === "research") body.sessions = Number(document.querySelector("#sessions").value);
       else {
         body.batches = Number(document.querySelector("#batches").value);
         body.turns = Number(document.querySelector("#turns").value);
       }
       const response = await fetch("/api/experiments/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body), signal:controller.signal});
-      await consumeStream(response);
+      await consumeStream(response, submittedMode);
     } catch (error) {
       document.querySelector("#experiment-status").textContent = error.name === "AbortError" ? "Experiment cancelled." : "The experiment disconnected or stopped safely.";
     } finally {
-      // Clearing both references minimizes accidental credential retention.
-      key.value = "";
+      // Keep the masked key available for another request while releasing request state.
       controller = null;
       setRunning(false);
     }

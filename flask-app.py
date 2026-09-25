@@ -78,7 +78,9 @@ def leaderboard_page():
     mounted_records = completed_records(EXPERIMENTS)
     if not mounted_records and not RECORDS.is_file():
         return Response(
-            "<h1>Leaderboard unavailable</h1><p>No experiment results have been persisted yet.</p>",
+            "<h1>Leaderboard unavailable</h1>"
+            "<p>No completed research results are available yet. "
+            "Short previews are saved for resumption but are not published here.</p>",
             status=404,
             content_type="text/html; charset=utf-8",
         )
