@@ -31,3 +31,5 @@
 - Distinguish checkpointed logical work units from paid provider requests in every workload display. Apply safety ceilings to the worst-case request count, including all bounded continuation attempts.
 - Recalculate browser workload disclosures whenever a workload-defining input changes; never leave default-session figures visible for a different submitted session count.
 - Keep browser input maxima within the server's worst-case paid-request ceiling, and treat above-maximum values as invalid when calculating disclosures.
+- Persist paid provider-attempt reservations before each request and enforce their confirmed ceiling across retries and resumes; incomplete logical units do not erase spent attempts.
+- Label browser cost ranges as rough estimates, update them with every model or workload change, state their assumptions, and recommend a provider-side spending limit.

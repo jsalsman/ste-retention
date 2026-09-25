@@ -94,3 +94,29 @@ def test_preview_paid_request_ceiling_includes_all_continuations():
     assert MAX_PROVIDER_REQUESTS == MAX_WORK_UNITS * (MAX_CONTINUATIONS + 1)
     # The currently advertised maximum is twelve units times four provider requests.
     assert MAX_PROVIDER_REQUESTS == 48
+
+
+def test_preview_forwards_durable_attempt_accounting():
+    """Let the web layer reserve each paid preview request before transport."""
+    reservations = []
+
+    def request(_key, _model, _messages, **options):
+        """Invoke the production-style attempt callback without external inference."""
+        # A real adapter invokes this once immediately before its provider request.
+        options["on_attempt"]()
+        # Complete local text lets all four variant units run deterministically.
+        return "Use a short active sentence."
+
+    events = list(
+        run_experiment(
+            "secret",
+            "openai/gpt-6-sol",
+            1,
+            1,
+            request=request,
+            on_attempt=lambda: reservations.append("durable"),
+        )
+    )
+
+    assert events[-1]["type"] == "success"
+    assert len(reservations) == 4

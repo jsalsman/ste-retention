@@ -487,3 +487,10 @@ def test_workload_help_discloses_logical_units_and_maximum_paid_requests(client)
     assert b"primary > primaryMaximum" in script.data
     assert b"paid-request safety ceiling" in script.data
     assert b'input.addEventListener("input", showWorkload)' in script.data
+    # Cost guidance must share workload inputs and react to model selection changes.
+    assert b'id="cost-estimate"' in response.data
+    assert b"Rough cost range:" in script.data
+    assert b'model.addEventListener("change", showWorkload)' in script.data
+    assert b"500 input + 300 output tokens" in script.data
+    assert b"8,000 input + 8,192 output tokens" in script.data
+    assert b"set an OpenRouter spending limit" in script.data

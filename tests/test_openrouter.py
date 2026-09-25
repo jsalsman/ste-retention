@@ -75,6 +75,22 @@ def test_chat_reports_incomplete_after_bounded_continuations(monkeypatch):
     assert post.call_count == openrouter.MAX_CONTINUATIONS + 1
 
 
+def test_chat_accounts_before_every_paid_attempt(monkeypatch):
+    """Reserve each initial and continuation request before invoking transport."""
+    partial = _response({"choices": [{"message": {"content": "Part"}, "finish_reason": "length"}]})
+    attempts = []
+    # All mocked responses truncate so every bounded attempt exercises accounting.
+    post = Mock(return_value=partial)
+    monkeypatch.setattr(openrouter.requests, "post", post)
+
+    with pytest.raises(openrouter.IncompleteGenerationError):
+        # The callback models a durable reservation without any paid external call.
+        openrouter.chat("secret", "model", [], on_attempt=lambda: attempts.append("reserved"))
+
+    assert len(attempts) == openrouter.MAX_CONTINUATIONS + 1
+    assert post.call_count == len(attempts)
+
+
 @pytest.mark.parametrize("finish_reason", [None, "", 7, "unexpected"])
 def test_chat_rejects_malformed_choice_metadata(monkeypatch, finish_reason):
     """Convert absent or invalid finish metadata into one sanitized upstream error."""

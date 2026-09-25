@@ -187,7 +187,7 @@ To resume, use the same state path and all the same configuration values. Add `-
 
 ## Cost
 
-The current code does not contain a pricing table. It does not calculate a currency estimate because provider prices and model identifiers can change.
+The command-line worker does not contain a pricing table or calculate a currency estimate. The web form contains a dated model-price snapshot only for its explicitly labeled rough planning range; provider prices and model identifiers can change.
 
 The old program estimated 5.92 USD for one default batch. It estimated 12 to 18 USD for a typical adaptive run. These historical values do not describe the current fixed-session worker. Do not use them as a current quote.
 
@@ -195,7 +195,7 @@ Before a run, calculate both logical units and the maximum provider-request coun
 
 The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
-The web form recalculates both the logical-generation count and maximum paid provider-request count when the user changes preview turns, batches, or research sessions. Because one web session can make at most 192 provider requests, the form caps research at 5,208 sessions so the worst case stays below the 1,000,000-request server safety ceiling. It does not show a currency estimate. The user who enters the OpenRouter key accepts the provider charges.
+The web form recalculates the logical-generation count, maximum paid provider-request count, and a rough model-specific cost range when the user changes the model, preview turns, batches, or research sessions. Prices were verified against OpenRouter's live catalog on 2026-09-25. The low range assumes one request with 500 input and 300 output tokens per logical unit; the high range assumes four requests with 8,000 input and 8,192 output tokens each. This deliberately broad range is not a quote or spending cap. Because one web session can make at most 192 provider requests, the form caps research at 5,208 sessions so the worst case stays below the 1,000,000-request server safety ceiling. The user who enters the OpenRouter key accepts the provider charges and should set a provider-side spending limit.
 
 ## The files
 

@@ -136,6 +136,8 @@ def new_state(config: ResearchConfig, run_id: str | None = None) -> dict:
         "updated_at": now,
         "units": [],
         "records": [],
+        # Paid attempts are durable separately because incomplete units have no record.
+        "paid_request_attempts": 0,
     }
 
 
@@ -178,6 +180,11 @@ def parse_state(contents: str | bytes, config: ResearchConfig, run_id: str) -> d
         {unit.get("unit_id") for unit in units if isinstance(unit, dict)}
     ) != len(units):
         raise ValueError("The research snapshot contains duplicate or malformed units.")
+    paid_attempts = state.setdefault("paid_request_attempts", 0)
+    maximum_attempts = config.workload()["maximum_provider_requests"]
+    if type(paid_attempts) is not int or not 0 <= paid_attempts <= maximum_attempts:
+        # Never resume state that can bypass or has already exceeded its paid ceiling.
+        raise ValueError("The research snapshot has invalid paid-request accounting.")
     return state
 
 
@@ -203,6 +210,24 @@ def run_research(
     """Run or resume every arm, persisting each inference before reporting it."""
     config.validate()
     completed = {unit["unit_id"]: unit for unit in state["units"]}
+    maximum_attempts = config.workload()["maximum_provider_requests"]
+
+    def account_attempt() -> None:
+        """Reserve and persist one paid request before contacting the provider.
+
+        The durable counter spans retries and resumes, so repeated incomplete
+        generations cannot exceed the originally disclosed worst-case request
+        ceiling. Persisting first can conservatively overcount an interrupted call,
+        but it cannot conceal a request that might have reached the provider.
+        """
+        paid_attempts = state.get("paid_request_attempts", 0)
+        if type(paid_attempts) is not int or paid_attempts >= maximum_attempts:
+            # Stop before another request can exceed the confirmed workload ceiling.
+            raise RuntimeError("The paid-provider request ceiling was reached.")
+        state["paid_request_attempts"] = paid_attempts + 1
+        # This checkpoint contains no credential and precedes the external request.
+        persist(state)
+
     for model in config.models:
         for session in range(1, config.sessions + 1):
             session_id = f"{model}:{session}"
@@ -229,6 +254,7 @@ def run_research(
                             messages,
                             timeout=config.provider_timeout,
                             max_tokens=config.max_tokens,
+                            on_attempt=account_attempt,
                         )
                         unit = {
                             "unit_id": unit_id,
@@ -272,6 +298,7 @@ def run_research(
                                 # JSON judging needs less output, but 256 tokens avoids
                                 # truncating valid provider wrappers before their stop.
                                 max_tokens=256,
+                                on_attempt=account_attempt,
                             )
                             judge_value = parse_judge_score(raw)
                             judge_unit = {

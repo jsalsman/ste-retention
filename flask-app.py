@@ -9,7 +9,13 @@ from flask import Flask, Response, jsonify, request, send_file, stream_with_cont
 
 from ste.experiment import ALLOWED_MODELS, UPSTREAM_TIMEOUT_SECONDS, run_experiment, validate_run
 from ste.leaderboard import render_file, render_leaderboard
-from ste.models.openrouter import DEFAULT_MAX_TOKENS, IncompleteGenerationError, UpstreamError, chat
+from ste.models.openrouter import (
+    DEFAULT_MAX_TOKENS,
+    MAX_CONTINUATIONS,
+    IncompleteGenerationError,
+    UpstreamError,
+    chat,
+)
 from ste.records import RecordError
 from ste.research import ResearchConfig, load_state, new_state, parse_state, run_research
 from ste.runs.backend import LeaseUnavailableError, is_not_found
@@ -186,6 +192,20 @@ def experiment_stream():
         # The API key is held only by the surrounding request and never enters state.
         snapshots.write(state)
 
+    def account_attempt() -> None:
+        """Persist one preview provider-request reservation before transport starts."""
+        maximum = batches * turns * 4 * (MAX_CONTINUATIONS + 1)
+        paid_attempts = state.get("paid_request_attempts", 0)
+        if type(paid_attempts) is not int or paid_attempts >= maximum:
+            # Repeated resumes cannot spend beyond the workload disclosed at creation.
+            raise RuntimeError("The paid-provider request ceiling was reached.")
+        expires = lease.heartbeat()
+        state["paid_request_attempts"] = paid_attempts + 1
+        state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+        state["lease_expires_at"] = expires.isoformat()
+        # Reserve durably first; a crash may overcount but can never hide paid work.
+        snapshots.write(state)
+
     @stream_with_context
     def generate():
         """Yield exactly one terminal event even when inference fails after headers."""
@@ -200,6 +220,7 @@ def experiment_stream():
                 turns,
                 existing_records=state["records"],
                 persist=checkpoint,
+                on_attempt=account_attempt,
                 run_id=state["run_id"],
                 seed=state["seed"],
             ):

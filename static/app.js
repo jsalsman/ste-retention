@@ -19,7 +19,36 @@
   const VARIANT_COUNT = 4;
   const RESEARCH_TURNS = 12;
   const REQUESTS_PER_UNIT = 4;
+  // Per-token OpenRouter prices were verified from the live catalog on 2026-09-25.
+  // Estimates use these exact-model input/output rates and never fetch with credentials.
+  const MODEL_PRICES = Object.freeze({
+    "google/gemini-3.8-flash": {input: 0.00000075, output: 0.00000375},
+    "openai/gpt-6-sol": {input: 0.000002, output: 0.00001},
+    "anthropic/claude-sonnet-5": {input: 0.000002, output: 0.00001},
+    "meta-llama/llama-4-maverick": {input: 0.0000001875, output: 0.0000006525},
+  });
   let controller = null;
+
+  /** Render a deliberately broad planning estimate for the selected workload.
+   *
+   * The low end assumes one request with 500 input and 300 output tokens per
+   * logical unit. The high end assumes all four requests, each with 8,000 input
+   * and 8,192 output tokens. Actual context, output, and provider routing vary.
+   */
+  function showCostEstimate(logicalUnits) {
+    const estimate = document.querySelector("#cost-estimate");
+    const price = MODEL_PRICES[model.value];
+    if (!price || !Number.isFinite(logicalUnits)) {
+      // Never retain a stale dollar range for an invalid model or workload.
+      estimate.textContent = "Enter valid settings to calculate a rough cost range.";
+      return;
+    }
+    const low = logicalUnits * (500 * price.input + 300 * price.output);
+    const high = logicalUnits * REQUESTS_PER_UNIT * (8000 * price.input + 8192 * price.output);
+    // Currency formatting is approximate and does not imply a provider-side cap.
+    const currency = {style:"currency", currency:"USD", minimumFractionDigits:2, maximumFractionDigits:4};
+    estimate.textContent = `Rough cost range: ${low.toLocaleString("en-US", currency)}–${high.toLocaleString("en-US", currency)}. Assumes 500 input + 300 output tokens per unit at the low end, and four requests of 8,000 input + 8,192 output tokens per unit at the high end. Actual token use and routing vary; set an OpenRouter spending limit.`;
+  }
 
   /** Recalculate the visible workload from the currently selected form values.
    *
@@ -41,10 +70,13 @@
       help.textContent = research
         ? `Enter 1 through ${primaryMaximum.toLocaleString("en-US")} research sessions to stay within the paid-request safety ceiling.`
         : "Enter valid preview settings to calculate the maximum paid workload.";
+      showCostEstimate(Number.NaN);
       return;
     }
     const logicalUnits = primary * turns * VARIANT_COUNT;
     const maximumRequests = logicalUnits * REQUESTS_PER_UNIT;
+    // Cost guidance uses the same selected logical workload as paid-request copy.
+    showCostEstimate(logicalUnits);
     // Locale formatting makes large selected workloads legible without changing values.
     const logicalText = logicalUnits.toLocaleString("en-US");
     const requestText = maximumRequests.toLocaleString("en-US");
@@ -212,6 +244,7 @@
   chatForm.addEventListener("submit", askModel);
   runForm.addEventListener("submit", startExperiment);
   runMode.addEventListener("change", showMode);
+  model.addEventListener("change", showWorkload);
   // Every workload-defining input updates the disclosure before paid work can start.
   for (const input of runForm.querySelectorAll("#sessions, #batches, #turns")) {
     input.addEventListener("input", showWorkload);

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from ste.models.openrouter import DEFAULT_MAX_TOKENS, IncompleteGenerationError
 from ste.protocol import (
     DEFAULT_RESEARCH_DEPTHS,
     PROMPT_POOL,
@@ -11,7 +12,6 @@ from ste.protocol import (
     STE_RULES,
     VARIANTS,
 )
-from ste.models.openrouter import DEFAULT_MAX_TOKENS
 from ste.research import (
     MAX_RESEARCH_CALLS,
     MAX_REQUESTS_PER_UNIT,
@@ -83,6 +83,40 @@ def test_workload_reports_and_enforces_maximum_provider_requests():
     )
     with pytest.raises(ValueError, match="paid-request safety limit"):
         above_web_limit.validate()
+
+
+def test_failed_attempts_remain_bounded_across_resumes():
+    """Persist incomplete paid attempts so repeated resumes cannot exceed disclosure."""
+    config = ResearchConfig(("openai/gpt-6-sol",), 1, (1,))
+    state = new_state(config, "e" * 32)
+    persisted = []
+
+    def incomplete_request(_key, _model, _messages, **options):
+        """Consume all four local attempts, then report an incomplete generation."""
+        for _attempt in range(MAX_REQUESTS_PER_UNIT):
+            # The production adapter invokes this immediately before each provider call.
+            options["on_attempt"]()
+        # No external provider is contacted by this deterministic failure double.
+        raise IncompleteGenerationError("partial", "length")
+
+    maximum = config.workload()["maximum_provider_requests"]
+    for _resume in range(MAX_REQUESTS_PER_UNIT):
+        with pytest.raises(IncompleteGenerationError):
+            list(
+                run_research(
+                    "secret",
+                    config,
+                    state,
+                    lambda value: persisted.append(dict(value)),
+                    request=incomplete_request,
+                )
+            )
+    assert state["paid_request_attempts"] == maximum
+    # A further resume stops before its fake can represent another provider request.
+    with pytest.raises(RuntimeError, match="request ceiling"):
+        list(run_research("secret", config, state, lambda _value: None, request=incomplete_request))
+    assert state["paid_request_attempts"] == maximum
+    assert persisted[-1]["paid_request_attempts"] == maximum
 
 
 @pytest.mark.parametrize("depths", [(-1, 1), (0, 1), (1, 2.5, 3), (True, 2)])

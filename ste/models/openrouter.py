@@ -1,6 +1,7 @@
 """Credential-safe OpenRouter HTTP communication with complete-output retries."""
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,6 +56,7 @@ def chat(
     *,
     timeout: float = 45,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    on_attempt: Callable[[], None] | None = None,
 ) -> ChatCompletion:
     """Return one validated response that the provider explicitly finished.
 
@@ -69,6 +71,8 @@ def chat(
         messages: Conversation messages; this function copies them before retrying.
         timeout: Maximum seconds for the complete logical response, including retries.
         max_tokens: Output-token allowance for each provider attempt.
+        on_attempt: Optional durable accounting callback invoked immediately before
+            each provider request. If it raises, that request is not sent.
 
     Returns:
         A completion whose finish reason is ``stop`` and whose content combines
@@ -96,6 +100,9 @@ def chat(
             if remaining <= 0:
                 # Partial text is diagnostic output, not completed experimental work.
                 raise IncompleteGenerationError("".join(content_parts), last_reason)
+            if on_attempt is not None:
+                # Account durably before sending so crashes cannot hide paid work.
+                on_attempt()
             response = requests.post(
                 OPENROUTER_URL,
                 headers={

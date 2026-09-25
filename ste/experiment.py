@@ -65,10 +65,16 @@ def run_experiment(
     clock: Callable[[], float] = time.monotonic,
     existing_records: list[dict] | None = None,
     persist: Callable[[list[dict]], None] | None = None,
+    on_attempt: Callable[[], None] | None = None,
     run_id: str | None = None,
     seed: int = 1,
 ) -> Iterator[dict]:
-    """Yield progress while skipping saved units and checkpointing each new response."""
+    """Yield progress while skipping saved units and checkpointing each new response.
+
+    ``on_attempt`` is forwarded to the provider adapter so the web layer can
+    durably reserve paid requests independently from completed record checkpoints.
+    Injected test transports may ignore it because they make no paid calls.
+    """
     model, batches, turns = validate_run(model, batches, turns)
     total = batches * turns * len(VARIANTS)
     started = clock()
@@ -134,6 +140,7 @@ def run_experiment(
                     messages,
                     timeout=timeout,
                     max_tokens=DEFAULT_MAX_TOKENS,
+                    on_attempt=on_attempt,
                 )
                 # Context is retained within an arm, matching the retention design.
                 history.extend(
