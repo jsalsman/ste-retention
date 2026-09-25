@@ -637,16 +637,26 @@ def test_model_catalog_endpoint_serves_the_catalog_unchanged(client):
 @pytest.mark.parametrize("free_model", [spec.id for spec in MODEL_CATALOG if spec.free])
 def test_free_models_are_accepted_for_interaction(client, module, monkeypatch, free_model):
     """Send each free catalog identifier upstream unchanged."""
+    # Captured identifiers prove what would have been sent to OpenRouter.
     sent = []
 
     def fake_chat(_key, model, _messages):
+        """Record the requested model and return a complete mocked generation.
+
+        This replaces the paid provider call, so the test never contacts OpenRouter
+        and never needs a real credential.
+        """
+        # Only the model identifier matters; the key and messages are ignored.
         sent.append(model)
+        # An explicit stop marks the mocked generation as complete.
         return ChatCompletion("Free answer.", "stop", True)
 
+    # Mock the provider call before the request reaches the interaction route.
     monkeypatch.setattr(module, "chat", fake_chat)
     response = client.post(
         "/api/interact",
         json={"api_key": "sample-secret", "model": free_model, "prompt": "Hello"},
     )
+    # Free identifiers pass the allow-list and reach the provider exactly as listed.
     assert response.status_code == 200
     assert sent == [free_model]
