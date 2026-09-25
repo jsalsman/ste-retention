@@ -30,6 +30,11 @@ MAX_RESEARCH_SESSIONS = 10_000
 MAX_RESEARCH_DEPTH = 128
 MAX_RESEARCH_CALLS = 1_000_000
 MAX_REQUESTS_PER_UNIT = MAX_CONTINUATIONS + 1
+# The web study fixes one model, no judge, four variants, and the default deepest
+# turn, so this derived bound is the largest session count below the paid ceiling.
+MAX_WEB_RESEARCH_SESSIONS = MAX_RESEARCH_CALLS // (
+    len(VARIANTS) * max(DEFAULT_RESEARCH_DEPTHS) * MAX_REQUESTS_PER_UNIT
+)
 
 
 @dataclass(frozen=True)

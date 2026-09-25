@@ -10,6 +10,7 @@ import pytest
 import ste.runs.lease as lease_module
 from ste.models.openrouter import ChatCompletion, IncompleteGenerationError
 from ste.protocol import ALLOWED_MODELS
+from ste.research import MAX_WEB_RESEARCH_SESSIONS
 from ste.runs.backend import GCSMount, StorageBackend
 from ste.runs.store import SnapshotFencer
 from tests.fake_gcs import FakeBucket
@@ -478,7 +479,11 @@ def test_workload_help_discloses_logical_units_and_maximum_paid_requests(client)
     assert b"16 paid provider requests" in response.data
     assert b"Each session uses 48 logical generations" in response.data
     assert b"192 paid provider requests" in response.data
+    session_limit = f'id="sessions" type="number" min="1" max="{MAX_WEB_RESEARCH_SESSIONS}"'
+    assert session_limit.encode() in response.data
     # Dynamic mode switching must retain the same worst-case paid disclosures.
     assert b"logicalUnits = primary * turns * VARIANT_COUNT" in script.data
     assert b"maximumRequests = logicalUnits * REQUESTS_PER_UNIT" in script.data
+    assert b"primary > primaryMaximum" in script.data
+    assert b"paid-request safety ceiling" in script.data
     assert b'input.addEventListener("input", showWorkload)' in script.data

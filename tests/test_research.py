@@ -15,6 +15,7 @@ from ste.models.openrouter import DEFAULT_MAX_TOKENS
 from ste.research import (
     MAX_RESEARCH_CALLS,
     MAX_REQUESTS_PER_UNIT,
+    MAX_WEB_RESEARCH_SESSIONS,
     ResearchConfig,
     load_state,
     new_state,
@@ -72,6 +73,16 @@ def test_workload_reports_and_enforces_maximum_provider_requests():
     # Validation applies the ceiling to paid requests rather than logical checkpoints.
     with pytest.raises(ValueError, match="paid-request safety limit"):
         excessive.validate()
+
+    web_limit = ResearchConfig(("openai/gpt-6-sol",), MAX_WEB_RESEARCH_SESSIONS, (1, 6, 12))
+    # The derived browser maximum is accepted, but its immediate successor is not.
+    web_limit.validate()
+    assert web_limit.workload()["maximum_provider_requests"] <= MAX_RESEARCH_CALLS
+    above_web_limit = ResearchConfig(
+        ("openai/gpt-6-sol",), MAX_WEB_RESEARCH_SESSIONS + 1, (1, 6, 12)
+    )
+    with pytest.raises(ValueError, match="paid-request safety limit"):
+        above_web_limit.validate()
 
 
 @pytest.mark.parametrize("depths", [(-1, 1), (0, 1), (1, 2.5, 3), (True, 2)])

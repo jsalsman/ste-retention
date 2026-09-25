@@ -33,9 +33,14 @@
     // Read only the active mode's numeric controls so hidden values cannot confuse copy.
     const primary = research ? Number(sessions.value) : Number(document.querySelector("#batches").value);
     const turns = research ? RESEARCH_TURNS : Number(document.querySelector("#turns").value);
-    if (!Number.isInteger(primary) || primary < 1 || !Number.isInteger(turns) || turns < 1) {
+    const primaryMaximum = research ? Number(sessions.max) : Number(document.querySelector("#batches").max);
+    const turnsMaximum = research ? RESEARCH_TURNS : Number(document.querySelector("#turns").max);
+    if (!Number.isInteger(primary) || primary < 1 || primary > primaryMaximum ||
+        !Number.isInteger(turns) || turns < 1 || turns > turnsMaximum) {
       // Do not advertise a stale workload while the user edits a numeric field.
-      help.textContent = "Enter valid experiment settings to calculate the maximum paid workload.";
+      help.textContent = research
+        ? `Enter 1 through ${primaryMaximum.toLocaleString("en-US")} research sessions to stay within the paid-request safety ceiling.`
+        : "Enter valid preview settings to calculate the maximum paid workload.";
       return;
     }
     const logicalUnits = primary * turns * VARIANT_COUNT;
