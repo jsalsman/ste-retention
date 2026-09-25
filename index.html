@@ -62,6 +62,7 @@
         <input id="resume-run-id" type="text" inputmode="text" pattern="[a-f0-9]{32}" maxlength="32" autocomplete="off">
         <p class="help">After a disconnect, enter the displayed run ID with the same model and controls. Completed work will not be repeated.</p>
         <button id="check-run" type="button" class="secondary">Check run status</button>
+        <p id="run-status" class="help" role="status" aria-live="polite"></p>
         <p id="cost-estimate" class="help" role="status" aria-live="polite"></p>
         <button type="submit">Start experiment</button>
         <div id="experiment-status" class="status" role="status" aria-live="polite">Ready for an experiment.</div>

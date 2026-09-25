@@ -447,7 +447,8 @@
   /** Query safe heartbeat metadata and announce whether a persisted run is active or stalled. */
   async function checkRunStatus() {
     const runId = document.querySelector("#resume-run-id").value.trim();
-    const status = document.querySelector("#experiment-status");
+    // Report beside the button so the result appears directly below it.
+    const status = document.querySelector("#run-status");
     if (!/^[a-f0-9]{32}$/.test(runId)) {
       // Reject malformed identifiers before constructing a URL path.
       status.textContent = "Enter a valid 32-character run ID first.";
