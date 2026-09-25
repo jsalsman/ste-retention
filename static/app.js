@@ -449,8 +449,9 @@
   }
 
   /**
-   * Monotonic token for run-status lookups. clearRunStatus() advances it so a lookup
-   * started before a handle change or a new experiment cannot display its stale result.
+   * Monotonic token for run-status lookups. Each lookup and clearRunStatus() advance it so
+   * a lookup superseded by a newer click, a handle change, or a new experiment cannot
+   * display its stale result.
    */
   let runStatusGeneration = 0;
 
@@ -470,13 +471,13 @@
     const runId = document.querySelector("#resume-run-id").value.trim();
     // Report beside the button so the result appears directly below it.
     const status = document.querySelector("#run-status");
+    // Each click supersedes earlier lookups so only the latest request can update the region.
+    const generation = ++runStatusGeneration;
     if (!/^[a-f0-9]{32}$/.test(runId)) {
       // Reject malformed identifiers before constructing a URL path.
       status.textContent = "Enter a valid 32-character run ID first.";
       return;
     }
-    // Capture this lookup's generation before any asynchronous work begins.
-    const generation = runStatusGeneration;
     status.textContent = "Checking the saved run heartbeat…";
     try {
       const response = await fetch(`/api/experiments/${encodeURIComponent(runId)}/status`, {headers:{"Accept":"application/json"}});
