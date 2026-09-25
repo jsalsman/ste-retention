@@ -338,7 +338,12 @@ def _load_research_run(path: Path) -> dict:
 
 
 def completed_records(directory: Path) -> list[dict]:
-    """Collect records only from successfully completed snapshots for leaderboard use."""
+    """Collect completed records with safe parent-run timing metadata for the leaderboard.
+
+    The elapsed value is wall-clock time from snapshot creation through its final
+    completed write. It can include pauses before a resumed run, so the leaderboard
+    labels it as elapsed rather than claiming it is provider execution time.
+    """
     if not directory.is_dir():
         return []
     records: list[dict] = []
@@ -354,5 +359,24 @@ def completed_records(directory: Path) -> list[dict]:
             # One damaged run must not make all valid leaderboard data unavailable.
             continue
         if state["status"] == "complete" and state.get("run_mode") == "research":
-            records.extend(state["records"])
+            try:
+                # Snapshot timestamps are authoritative for the complete run and include
+                # work before the first scored record, unlike record timestamps alone.
+                created = datetime.fromisoformat(state["created_at"])
+                updated = datetime.fromisoformat(state["updated_at"])
+                elapsed_seconds = (updated - created).total_seconds()
+            except (KeyError, TypeError, ValueError):
+                # Historical snapshots without usable bounds remain publishable; their
+                # runtime is explicitly shown as unavailable instead of being guessed.
+                elapsed_seconds = None
+            if elapsed_seconds is not None and (
+                not math.isfinite(elapsed_seconds) or elapsed_seconds < 0
+            ):
+                elapsed_seconds = None
+            for record in state["records"]:
+                # Copy records so display-only metadata never mutates persisted state.
+                exported = {**record}
+                if elapsed_seconds is not None:
+                    exported["_run_elapsed_seconds"] = elapsed_seconds
+                records.append(exported)
     return records

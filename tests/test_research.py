@@ -175,7 +175,9 @@ def test_completed_records_loads_completed_research_schema(tmp_path):
     # Operator-selected state paths need not encode the independently generated run ID.
     save_state(tmp_path / "operator-selected-state.json", state)
     # Preview-only fields and a filename-derived run ID are intentionally unnecessary.
-    assert completed_records(tmp_path) == [record]
+    exported = completed_records(tmp_path)
+    assert {key: value for key, value in exported[0].items() if not key.startswith("_")} == record
+    assert exported[0]["_run_elapsed_seconds"] >= 0
 
 
 def test_load_state_rejects_snapshot_from_repeating_prompt_protocol(tmp_path):

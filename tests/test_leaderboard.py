@@ -46,6 +46,18 @@ def test_factorial_main_effects_average_both_levels():
     # Marginal effects are rules=(10+20)/2 and naming=(20+30)/2.
     assert "+15.0" in rendered
     assert "+25.0" in rendered
+    assert "70.0" in rendered
+
+
+def test_results_precede_uncertainty_in_dark_dashboard():
+    """Place the prominently styled leaderboard before its interpretation guidance."""
+    # A dedicated body class scopes the dark dashboard without changing the experiment form.
+    # Landmark headings make the visual reordering equally clear to assistive technology.
+    rendered = render_leaderboard([])
+
+    assert '<body class="leaderboard-page">' in rendered
+    assert '<h2 id="results-title">Leaderboard</h2>' in rendered
+    assert rendered.index('id="results-title"') < rendered.index('id="uncertainty"')
 
 
 def test_intervals_use_complete_cell_baselines_and_paired_effects():
@@ -69,6 +81,7 @@ def test_intervals_use_complete_cell_baselines_and_paired_effects():
     numeric = [tuple(float(value) for value in cell) for cell in cells]
     assert numeric == pytest.approx(
         [
+            (44.5, -76.2, 165.2),
             (50.0, -77.1, 177.1),
             (6.0, -13.1, 25.1),
             (-7.5, -7.5, -7.5),
@@ -118,7 +131,7 @@ def test_incomplete_retry_does_not_hide_completed_run():
 
     # The complete retry contributes exactly one paired observation.
     assert "<td>1</td>" in rendered
-    assert rendered.count("95% CI unavailable; fewer than 2 sessions") == 4
+    assert rendered.count("95% CI unavailable; fewer than 2 sessions") == 5
     assert "No complete experiment records" not in rendered
 
 
@@ -164,3 +177,34 @@ def test_incomplete_cells_do_not_enter_interval_sample():
     assert baseline is not None
     assert tuple(float(value) for value in baseline.groups()) == pytest.approx((40.0, -87.1, 167.1))
     assert "<td>2</td>" in rendered
+
+
+def test_rows_rank_by_named_score_without_rules_and_show_runtime():
+    """Rank by the named-arm score and show total complete-run elapsed time."""
+    # Model names sort opposite to their effects so this catches accidental label sorting.
+    # Two runs in the winning row verify that elapsed values are added once per run.
+    records = []
+    for run_id, model, effect, elapsed in (
+        ("one", "z-low", 5, 30),
+        ("two", "a-high", 20, 70),
+        ("three", "a-high", 20, 50),
+    ):
+        for variant, score in (
+            ("bare", 40),
+            ("rules", 40),
+            ("named", 40 + effect),
+            ("named_rules", 40 + effect),
+        ):
+            record = _arm(run_id, variant, score)
+            record["model"] = model
+            record["_run_elapsed_seconds"] = elapsed
+            records.append(record)
+
+    rendered = render_leaderboard(records)
+
+    assert rendered.index('data-model="a-high"') < rendered.index('data-model="z-low"')
+    # Rank remains ordinary tabular data while the model identifies every metric in its row.
+    assert '<td>1</td><th scope="row">a-high</th><td>60.0' in rendered
+    assert "<th>Protocol version</th>" not in rendered
+    assert "<th>Scoring version</th>" not in rendered
+    assert "<td>2m 0s</td>" in rendered
