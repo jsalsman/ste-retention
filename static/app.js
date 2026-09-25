@@ -19,46 +19,226 @@
   const VARIANT_COUNT = 4;
   const RESEARCH_TURNS = 12;
   const REQUESTS_PER_UNIT = 4;
-  // Per-token OpenRouter prices were verified from the live catalog on 2026-09-25.
-  // Estimates use these exact-model input/output rates and never fetch with credentials.
-  const MODEL_PRICES = Object.freeze({
-    "google/gemini-3.8-flash": {input: 0.00000075, output: 0.00000375},
-    "openai/gpt-5.6-luna": {input: 0.0000002, output: 0.0000012},
-    "anthropic/claude-haiku-4.5": {input: 0.000001, output: 0.000005},
-    "meta-llama/llama-4-maverick": {input: 0.0000001875, output: 0.0000006525},
-  });
-  // These normalized spend factors come from completed 288-unit studies: Llama
-  // cost $0.08 and Gemini cost $2.10. Multiplying by a model's summed base rates
-  // preserves model-price sensitivity without using the former worst-case ceiling.
-  const REFERENCE_LOGICAL_UNITS = 288;
-  const OBSERVED_COST_FACTORS = Object.freeze({
-    low: 0.08 / REFERENCE_LOGICAL_UNITS /
-      (MODEL_PRICES["meta-llama/llama-4-maverick"].input + MODEL_PRICES["meta-llama/llama-4-maverick"].output),
-    high: 2.10 / REFERENCE_LOGICAL_UNITS /
-      (MODEL_PRICES["google/gemini-3.8-flash"].input + MODEL_PRICES["google/gemini-3.8-flash"].output),
-  });
+  // The server's model catalog is the only source of identifiers, labels, prices,
+  // and cost anchors. It stays null until a validated `/api/models` response arrives,
+  // and cost copy stays neutral while it is missing.
+  let catalog = null;
   let controller = null;
+
+  /** Format a validated dollar amount for approximate, non-binding disclosure copy.
+   *
+   * @param {number} value Finite, non-negative US-dollar amount.
+   * @returns {string} Locale-formatted currency text such as "$0.08".
+   */
+  function dollars(value) {
+    // Up to four decimals keep very small paid-model estimates distinguishable from zero.
+    const currency = {style:"currency", currency:"USD", minimumFractionDigits:2, maximumFractionDigits:4};
+    // A fixed locale keeps disclosure copy identical for every visitor.
+    return value.toLocaleString("en-US", currency);
+  }
 
   /** Render an empirically calibrated planning estimate for the selected workload.
    *
    * The range scales two completed-study observations by logical work and by the
    * selected model's combined base-token price. It remains approximate because
    * model output length, input/output mix, continuations, and routing can differ.
+   * Free catalog variants receive rate-limit guidance instead of a dollar range.
+   *
+   * @param {number} logicalUnits Selected logical generations, or NaN when invalid.
    */
   function showCostEstimate(logicalUnits) {
     const estimate = document.querySelector("#cost-estimate");
-    const price = MODEL_PRICES[model.value];
+    // A missing catalog or unknown selection yields no price rather than a guess.
+    const price = catalog?.prices.get(model.value);
     if (!price || !Number.isFinite(logicalUnits)) {
       // Never retain a stale dollar range for an invalid model or workload.
       estimate.textContent = "Enter valid settings to calculate a rough cost range.";
       return;
     }
+    // Every estimate states when its catalog prices were last verified.
+    const verified = `Prices were checked against OpenRouter on ${catalog.verifiedOn} and can change.`;
+    if (price.free) {
+      // Zero listed prices still carry provider limits that can interrupt long studies.
+      estimate.textContent = `Rough cost estimate: $0.00. This free variant lists no token charges, but OpenRouter rate limits free models, so a long study can stop early; resume it with the run ID. ${verified} Set an OpenRouter spending limit in case pricing or routing changes.`;
+      return;
+    }
+    // Calibration anchors were validated and normalized by parseCatalog().
+    const {low, high, logicalUnits:referenceUnits} = catalog.calibration;
     const blendedPrice = price.input + price.output;
-    const low = logicalUnits * blendedPrice * OBSERVED_COST_FACTORS.low;
-    const high = logicalUnits * blendedPrice * OBSERVED_COST_FACTORS.high;
+    // Each anchor is normalized by its reference model's price, then rescaled here.
+    const lowCost = logicalUnits * blendedPrice * low.factor;
+    const highCost = logicalUnits * blendedPrice * high.factor;
     // Currency formatting is approximate and does not imply a provider-side cap.
-    const currency = {style:"currency", currency:"USD", minimumFractionDigits:2, maximumFractionDigits:4};
-    estimate.textContent = `Rough cost range: ${low.toLocaleString("en-US", currency)}–${high.toLocaleString("en-US", currency)}. Calibrated from completed 288-unit studies that cost $0.08 with Llama 4 Maverick and $2.10 with Gemini 3.8 Flash, then scaled by selected workload and base token prices. Actual input/output mix, continuations, and routing vary; set an OpenRouter spending limit.`;
+    estimate.textContent = `Rough cost range: ${dollars(lowCost)}–${dollars(highCost)}. Calibrated from completed ${referenceUnits}-unit studies that cost ${dollars(low.usd)} with ${low.label} and ${dollars(high.usd)} with ${high.label}, then scaled by selected workload and base token prices. ${verified} Actual input/output mix, continuations, and routing vary; set an OpenRouter spending limit.`;
+  }
+
+  /** Accept only short, non-blank strings from the untrusted catalog payload.
+   *
+   * @param {unknown} value Candidate identifier, label, or date.
+   * @returns {boolean} Whether the value is safe to display and use as a key.
+   */
+  function catalogText(value) {
+    // Blank strings would render as empty options or unlabeled anchors.
+    const nonBlank = typeof value === "string" && value.trim() !== "";
+    // A length bound keeps malformed payloads from producing oversized menu text.
+    return nonBlank && value.length <= 200;
+  }
+
+  /** Accept only finite, non-negative per-token US-dollar prices.
+   *
+   * @param {unknown} value Candidate per-token price.
+   * @returns {boolean} Whether the value can safely enter cost arithmetic.
+   */
+  function catalogRate(value) {
+    // Non-numeric, infinite, and negative prices would produce misleading estimates.
+    const finite = Number.isFinite(value) && value >= 0;
+    // No real per-token price approaches one dollar, so larger values are malformed.
+    return finite && value < 1;
+  }
+
+  /** Validate an untrusted `/api/models` payload into price and calibration lookups.
+   *
+   * Every identifier, label, price, and anchor is checked before it can reach the
+   * menu or an arithmetic expression. Any malformed entry rejects the whole
+   * catalog, so the page never shows a partial menu or a misleading estimate.
+   *
+   * @param {unknown} data Parsed JSON body from `/api/models`.
+   * @returns {?{models: Array<Object>, prices: Map<string, Object>, calibration: Object, verifiedOn: string}}
+   *   Validated lookups, or null when any part of the payload is malformed.
+   */
+  function parseCatalog(data) {
+    // An empty or undated catalog cannot support a menu or a dated estimate.
+    if (!Array.isArray(data?.models) || !data.models.length || !catalogText(data.verified_on)) return null;
+    // Ordered entries build the menu; the map serves constant-time price lookups.
+    const models = [];
+    const prices = new Map();
+    for (const entry of data.models) {
+      // Reject duplicates and non-numeric or negative prices instead of guessing.
+      if (!catalogText(entry?.id) || !catalogText(entry.label) || !catalogRate(entry.input) ||
+          !catalogRate(entry.output) || typeof entry.free !== "boolean" || prices.has(entry.id)) return null;
+      // Copy only validated fields so unexpected payload keys never reach the page.
+      models.push({id:entry.id, label:entry.label, free:entry.free, input:entry.input, output:entry.output});
+      prices.set(entry.id, {input:entry.input, output:entry.output, free:entry.free});
+    }
+    // The reference study size must be a positive whole number of logical units.
+    const units = data.calibration?.logical_units;
+    if (!Number.isInteger(units) || units < 1) return null;
+    const calibration = {logicalUnits:units};
+    for (const bound of ["low", "high"]) {
+      // Each anchor names a catalog model whose price normalizes its observed cost.
+      const anchor = data.calibration[bound];
+      const reference = prices.get(anchor?.model);
+      // Anchors must name a priced catalog model so normalization cannot divide by zero.
+      if (!reference || !catalogText(anchor.label) || !Number.isFinite(anchor.usd) || anchor.usd <= 0 ||
+          reference.input + reference.output <= 0) return null;
+      // Dollars per logical unit per unit of combined base price, reused for any model.
+      const factor = anchor.usd / units / (reference.input + reference.output);
+      calibration[bound] = {label:anchor.label, usd:anchor.usd, factor};
+    }
+    // Only a fully validated catalog is returned to callers.
+    return {models, prices, calibration, verifiedOn:data.verified_on};
+  }
+
+  /** Format a validated per-token price as dollars per million tokens.
+   *
+   * @param {number} rate Finite, non-negative per-token US-dollar price.
+   * @returns {string} Currency text such as "$0.75" for $0.00000075 per token.
+   */
+  function perMillion(rate) {
+    // Per-million-token rates match OpenRouter's catalog display and avoid tiny decimals.
+    const scaled = rate * 1e6;
+    // Reuse the shared currency formatter so menu and estimate precision agree.
+    return dollars(scaled);
+  }
+
+  /** Describe one catalog model with its exact identifier and per-million-token prices.
+   *
+   * The menu is wide enough for this detail, which lets users confirm the exact
+   * upstream identifier and price without leaving the page. Free variants say so
+   * instead of listing zero rates, because their label already marks them free.
+   *
+   * @param {{id: string, label: string, free: boolean, input: number, output: number}} entry
+   *   One validated catalog model.
+   * @returns {string} Plain option text, later assigned through `textContent`.
+   */
+  function optionText(entry) {
+    // Free labels already say "(free)", so zero rates would only add noise.
+    if (entry.free) return `${entry.label} — ${entry.id}`;
+    // Paid options show both directions because input and output rates differ.
+    return `${entry.label} — ${entry.id} — ${perMillion(entry.input)} in / ${perMillion(entry.output)} out per 1M tokens`;
+  }
+
+  /** Fetch the server catalog, then build grouped model options without HTML parsing.
+   *
+   * Options use `textContent` so catalog labels stay inert. The first catalog entry
+   * remains the default selection. A failure leaves an empty, invalid selection
+   * with an announced reload instruction rather than a stale hard-coded menu.
+   *
+   * @returns {Promise<void>} Resolves after the menu and disclosures are refreshed.
+   */
+  async function loadModels() {
+    const status = document.querySelector("#model-status");
+    try {
+      // The catalog is public, so this request never carries the credential.
+      const response = await fetch("/api/models", {headers:{"Accept":"application/json"}});
+      if (!response.ok) throw new Error("Model catalog lookup failed.");
+      // Untrusted JSON becomes usable only after full validation.
+      catalog = parseCatalog(await response.json());
+      if (!catalog) throw new Error("Model catalog is malformed.");
+      // Separate paid and free variants so rate-limited choices are easy to recognize.
+      const groups = [["Paid models", false], ["Free models (rate limited)", true]];
+      const fragment = document.createDocumentFragment();
+      for (const [label, free] of groups) {
+        // Collect this group's models while preserving catalog order.
+        const members = [];
+        for (const entry of catalog.models) if (entry.free === free) members.push(entry);
+        // Omit a group entirely when the catalog has no models of that kind.
+        if (!members.length) continue;
+        const group = document.createElement("optgroup");
+        group.label = label;
+        for (const entry of members) {
+          // Property assignment and textContent keep catalog strings inert.
+          const option = document.createElement("option");
+          option.value = entry.id;
+          option.textContent = optionText(entry);
+          group.append(option);
+        }
+        fragment.append(group);
+      }
+      // One replacement avoids announcing a partially built menu.
+      model.replaceChildren(fragment);
+      // Select the catalog's first entry, even when grouping reorders the menu.
+      model.value = catalog.models[0].id;
+      status.textContent = "";
+    } catch (_error) {
+      // An empty value keeps both server validation and the cost estimate neutral.
+      catalog = null;
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "Models unavailable";
+      model.replaceChildren(option);
+      // The live status region announces the recovery step to assistive technology.
+      status.textContent = "The model list could not be loaded. Reload the page to try again.";
+    }
+    // Refresh workload and cost copy for the newly available (or missing) selection.
+    showWorkload();
+  }
+
+  /** Read the selected catalog model, reporting an empty selection natively.
+   *
+   * @returns {string} The exact catalog identifier to send to the server.
+   * @throws {Error} When no catalog model is selected, such as after a load failure.
+   */
+  function selectedModel() {
+    if (!model.value) {
+      // Native validity connects the message to the model menu.
+      model.setCustomValidity("Select a model.");
+      model.reportValidity();
+      throw new Error("A model is required.");
+    }
+    // Clear any earlier validity message once a real model is selected.
+    model.setCustomValidity("");
+    return model.value;
   }
 
   /** Recalculate the visible workload from the currently selected form values.
@@ -148,7 +328,7 @@
     status.textContent = "Contacting the model…";
     try {
       const response = await fetch("/api/interact", {method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({api_key:credential(), model:model.value, prompt:document.querySelector("#prompt").value})});
+        body:JSON.stringify({api_key:credential(), model:selectedModel(), prompt:document.querySelector("#prompt").value})});
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "The request failed.");
       // textContent makes model-generated markup inert.
@@ -246,7 +426,7 @@
     try {
       const resume = document.querySelector("#resume-run-id").value.trim();
       // The run ID is safe metadata; the credential remains confined to this request body.
-      const body = {api_key:credential(), run_mode:submittedMode, model:model.value, resume_run_id:resume || null};
+      const body = {api_key:credential(), run_mode:submittedMode, model:selectedModel(), resume_run_id:resume || null};
       // Each mode sends only the settings that define that saved run.
       if (submittedMode === "research") body.sessions = Number(document.querySelector("#sessions").value);
       else {
@@ -296,4 +476,6 @@
   cancel.addEventListener("click", () => controller?.abort());
   checkRun.addEventListener("click", checkRunStatus);
   showMode();
+  // The menu arrives asynchronously; showMode() already rendered neutral cost copy.
+  loadModels();
 })();

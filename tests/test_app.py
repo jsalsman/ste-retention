@@ -8,6 +8,13 @@ from pathlib import Path
 import pytest
 
 import ste.runs.lease as lease_module
+from ste.models.catalog import (
+    COST_OBSERVATIONS,
+    COST_REFERENCE_LOGICAL_UNITS,
+    MODEL_CATALOG,
+    MODELS_BY_ID,
+    PRICES_VERIFIED_ON,
+)
 from ste.models.openrouter import ChatCompletion, IncompleteGenerationError
 from ste.protocol import ALLOWED_MODELS
 from ste.research import MAX_WEB_RESEARCH_SESSIONS
@@ -74,10 +81,10 @@ def test_static_page_contract():
     # Header credits must lead directly to the author's profile and project source.
     assert '<a href="https://linkedin.com/in/jsalsman">Jim Salsman</a>' in page
     assert '<a href="https://github.com/jsalsman/ste-retention">STE Retention Lab</a>' in page
-    # Every server-approved model must be exposed by the standalone form.
-    assert all(f'value="{model}"' in page for model in ALLOWED_MODELS)
-    # Exactly four options keep the client and the explicit server allow-list aligned.
-    assert page.count("<option value=") == len(ALLOWED_MODELS) + 2
+    # The catalog is the only model list; the page carries just a loading placeholder.
+    assert not any(model in page for model in ALLOWED_MODELS)
+    assert '<select id="model" required aria-describedby="model-status">' in page
+    assert 'id="model-status"' in page
     assert all(
         asset in page for asset in ("static/styles.css", "static/app.js", "static/loading.gif")
     )
@@ -106,31 +113,23 @@ def test_static_page_contract():
 
 
 @pytest.mark.parametrize(
-    ("current_model", "current_option", "retired_model"),
+    ("current_model", "current_label", "retired_model"),
     (
-        (
-            "openai/gpt-5.6-luna",
-            '<option value="openai/gpt-5.6-luna">GPT-5.6 Luna</option>',
-            "openai/gpt-6-sol",
-        ),
-        (
-            "anthropic/claude-haiku-4.5",
-            '<option value="anthropic/claude-haiku-4.5">Claude Haiku 4.5</option>',
-            "anthropic/claude-sonnet-5",
-        ),
+        ("openai/gpt-5.6-luna", "GPT-5.6 Luna", "openai/gpt-6-sol"),
+        ("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", "anthropic/claude-sonnet-5"),
     ),
 )
 def test_current_models_are_selectable_and_retired_models_are_rejected(
-    client, current_model, current_option, retired_model
+    client, current_model, current_label, retired_model
 ):
     """Keep exact OpenRouter menu identifiers and new-work validation aligned."""
-    page = (ROOT / "index.html").read_text()
+    served = {entry["id"]: entry for entry in client.get("/api/models").json["models"]}
     # New experiments use each verified identifier and its readable menu label.
     assert current_model in ALLOWED_MODELS
-    assert current_option in page
+    assert served[current_model]["label"] == current_label
     # Retired identifiers can remain in historical records, but not new requests.
     assert retired_model not in ALLOWED_MODELS
-    assert retired_model not in page
+    assert retired_model not in served
     response = client.post(
         "/api/interact",
         json={"api_key": "sample-secret", "model": retired_model, "prompt": "Hello"},
@@ -570,25 +569,94 @@ def test_workload_help_discloses_logical_units_and_maximum_paid_requests(client)
     assert b'id="cost-estimate"' in response.data
     assert b"Rough cost range:" in script.data
     assert b'model.addEventListener("change", showWorkload)' in script.data
-    assert b"completed 288-unit studies" in script.data
-    assert b"$0.08 with Llama 4 Maverick" in script.data
-    assert b"$2.10 with Gemini 3.8 Flash" in script.data
+    assert b"completed ${referenceUnits}-unit studies" in script.data
+    assert b"${dollars(low.usd)} with ${low.label}" in script.data
+    assert b"${dollars(high.usd)} with ${high.label}" in script.data
     assert b"set an OpenRouter spending limit" in script.data
+    # Free variants replace the dollar range with rate-limit guidance.
+    assert b"OpenRouter rate limits free models" in script.data
+    assert b"Set an OpenRouter spending limit" in script.data
 
 
 def test_model_prices_and_model_change_recalculate_cost_disclosure(client):
     """Price current models at verified base rates and refresh on selection."""
     script = client.get("/static/app.js").text
-    # Each selected menu identifier must index its exact-model price snapshot.
-    assert '"openai/gpt-5.6-luna": {input: 0.0000002, output: 0.0000012}' in script
-    assert '"anthropic/claude-haiku-4.5": {input: 0.000001, output: 0.000005}' in script
-    assert "const price = MODEL_PRICES[model.value];" in script
+    # The browser holds no identifiers or prices; it reads the served catalog only.
+    assert not any(model in script for model in ALLOWED_MODELS)
+    assert 'fetch("/api/models"' in script
+    assert "const price = catalog?.prices.get(model.value);" in script
     # Both empirical anchors are normalized, then applied to the selected model.
-    assert "0.08 / REFERENCE_LOGICAL_UNITS" in script
-    assert "2.10 / REFERENCE_LOGICAL_UNITS" in script
-    assert "logicalUnits * blendedPrice * OBSERVED_COST_FACTORS.low" in script
-    assert "logicalUnits * blendedPrice * OBSERVED_COST_FACTORS.high" in script
+    assert "anchor.usd / units / (reference.input + reference.output)" in script
+    assert "logicalUnits * blendedPrice * low.factor" in script
+    assert "logicalUnits * blendedPrice * high.factor" in script
+    # Catalog labels become options through textContent, never HTML parsing.
+    assert "option.textContent = optionText(entry);" in script
+    # Paid options show the exact identifier and per-million-token prices.
+    assert "${entry.label} — ${entry.id} — ${perMillion(entry.input)} in" in script
+    assert "innerHTML" not in script
     # A model change reruns the complete workload path, including its cost calculation.
     assert 'model.addEventListener("change", showWorkload)' in script
     workload = script.split("function showWorkload()", 1)[1].split("function showMode()", 1)[0]
     assert "showCostEstimate(logicalUnits);" in workload
+
+
+def test_model_catalog_endpoint_serves_the_catalog_unchanged(client):
+    """Serve every catalog model once, in order, with priced cost anchors."""
+    response = client.get("/api/models")
+    assert response.status_code == 200
+    data = response.json
+    # The endpoint and server validation derive from the same catalog, in menu order.
+    assert [entry["id"] for entry in data["models"]] == [spec.id for spec in MODEL_CATALOG]
+    assert {entry["id"] for entry in data["models"]} == ALLOWED_MODELS
+    assert data["verified_on"] == PRICES_VERIFIED_ON
+    for entry, spec in zip(data["models"], MODEL_CATALOG, strict=True):
+        # Labels and prices pass through without rounding or renaming.
+        assert entry["label"] == spec.label
+        assert (entry["input"], entry["output"]) == (
+            spec.input_usd_per_token,
+            spec.output_usd_per_token,
+        )
+        # The free flag is exactly the zero-price condition.
+        assert entry["free"] is (entry["input"] == entry["output"] == 0)
+    # The catalog offers both kinds of model, so both menu groups appear.
+    assert {entry["free"] for entry in data["models"]} == {True, False}
+    calibration = data["calibration"]
+    assert calibration["logical_units"] == COST_REFERENCE_LOGICAL_UNITS
+    for bound, (model_id, usd) in COST_OBSERVATIONS.items():
+        # Anchors name priced catalog models so the browser can normalize them.
+        assert calibration[bound] == {
+            "model": model_id,
+            "label": MODELS_BY_ID[model_id].label,
+            "usd": usd,
+        }
+        assert not MODELS_BY_ID[model_id].free
+    # The low anchor must not exceed the high anchor.
+    assert calibration["low"]["usd"] <= calibration["high"]["usd"]
+
+
+@pytest.mark.parametrize("free_model", [spec.id for spec in MODEL_CATALOG if spec.free])
+def test_free_models_are_accepted_for_interaction(client, module, monkeypatch, free_model):
+    """Send each free catalog identifier upstream unchanged."""
+    # Captured identifiers prove what would have been sent to OpenRouter.
+    sent = []
+
+    def fake_chat(_key, model, _messages):
+        """Record the requested model and return a complete mocked generation.
+
+        This replaces the paid provider call, so the test never contacts OpenRouter
+        and never needs a real credential.
+        """
+        # Only the model identifier matters; the key and messages are ignored.
+        sent.append(model)
+        # An explicit stop marks the mocked generation as complete.
+        return ChatCompletion("Free answer.", "stop", True)
+
+    # Mock the provider call before the request reaches the interaction route.
+    monkeypatch.setattr(module, "chat", fake_chat)
+    response = client.post(
+        "/api/interact",
+        json={"api_key": "sample-secret", "model": free_model, "prompt": "Hello"},
+    )
+    # Free identifiers pass the allow-list and reach the provider exactly as listed.
+    assert response.status_code == 200
+    assert sent == [free_model]

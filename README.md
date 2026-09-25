@@ -149,11 +149,23 @@ preview and research runners do not score or checkpoint it as completed work.
 Malformed provider metadata and provider failures produce a sanitized error
 without returning credentials or the provider response body.
 
-The model menu currently offers Gemini 3.8 Flash, GPT-5.6 Luna, Claude Haiku 4.5, and
-Llama 4 Maverick. These exact OpenRouter model identifiers were verified against
-the provider catalog on 2026-09-25. Exact identifiers make a study more
-reproducible than moving `latest` aliases, but the catalog can change. Verify
-availability before you start a large study.
+The model menu is built from `ste/models/catalog.py`, the only place that lists
+model identifiers, menu labels, and token prices. The page fetches it from
+`GET /api/models`, and server validation uses the same catalog. Each menu option
+shows the label, the exact identifier, and for paid models the input and output
+prices per million tokens. It currently
+offers four paid models (Gemini 3.8 Flash, GPT-5.6 Luna, Claude Haiku 4.5, and
+Llama 4 Maverick) and seven zero-priced `:free` variants (Nemotron 3 Ultra,
+Nemotron 3.5 Lightning, Nemotron 3 Super, Inkling, Qwen3.8 27B, Gemma 4 26B A4B,
+and Gemma 4 31B). These exact OpenRouter model identifiers and prices were
+verified against the provider catalog on 2026-09-25. Exact identifiers make a
+study more reproducible than moving `latest` aliases, but the catalog can change.
+Verify availability before you start a large study.
+
+OpenRouter applies per-minute and daily request limits to free variants, and an
+account's privacy settings can block the providers that serve them. A full study
+makes hundreds of requests, so a free-model study can stop early; resume it later
+with its run ID.
 
 * **Short preview:** This mode uses all four variants. It has at most 12 logical generations and 48 paid provider requests when every generation needs all three continuations.
 * **Full research study:** This mode uses the selected model and the full `ste.research` protocol. Six sessions have 288 logical generations and at most 1,152 paid provider requests.
@@ -209,7 +221,7 @@ To resume, use the same state path and all the same configuration values. Add `-
 
 ## Cost
 
-The command-line worker does not contain a pricing table or calculate a currency estimate. The web form contains a dated model-price snapshot only for its explicitly labeled rough planning range; provider prices and model identifiers can change.
+The command-line worker does not contain a pricing table or calculate a currency estimate. The web form uses the dated price snapshot in `ste/models/catalog.py` only for its explicitly labeled rough planning range; provider prices and model identifiers can change.
 
 The old program estimated 5.92 USD for one default batch. It estimated 12 to 18 USD for a typical adaptive run. These historical values do not describe the current fixed-session worker. Do not use them as a current quote.
 
@@ -217,7 +229,7 @@ Before a run, calculate both logical units and the maximum provider-request coun
 
 The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
-The web form recalculates the logical-generation count, maximum paid provider-request count, and a rough model-specific cost range when the user changes the model, preview turns, batches, or research sessions. Prices were verified against OpenRouter's live catalog on 2026-09-25. The narrower range is calibrated from completed 288-logical-unit studies that cost $0.08 with Llama 4 Maverick and $2.10 with Gemini 3.8 Flash. It normalizes those observations by each reference model's combined base input/output price, then scales them by the selected model's combined base price and the selected logical workload. This is an empirical planning range, not a quote or spending cap: input/output mix, response length, continuations, and routing can differ. The application caps research at 100 sessions and 20,000 worst-case paid provider requests; the web study reaches 19,200 requests at that session maximum. The user who enters the OpenRouter key accepts the provider charges and should set a provider-side spending limit.
+The web form recalculates the logical-generation count, maximum paid provider-request count, and a rough model-specific cost range when the user changes the model, preview turns, batches, or research sessions. Prices were verified against OpenRouter's live catalog on 2026-09-25. The narrower range is calibrated from completed 288-logical-unit studies that cost $0.08 with Llama 4 Maverick and $2.10 with Gemini 3.8 Flash. It normalizes those observations by each reference model's combined base input/output price, then scales them by the selected model's combined base price and the selected logical workload. This is an empirical planning range, not a quote or spending cap: input/output mix, response length, continuations, and routing can differ. The application caps research at 100 sessions and 20,000 worst-case paid provider requests; the web study reaches 19,200 requests at that session maximum. For a free variant, the form shows a $0.00 estimate with a rate-limit warning instead of a range. The user who enters the OpenRouter key accepts the provider charges and should set a provider-side spending limit.
 
 ## The files
 
@@ -272,6 +284,7 @@ The Flask route reads complete research snapshots from `EXPERIMENTS_DIR`. It can
 * `static/app.js` supplies browser behavior.
 * `static/styles.css` supplies presentation.
 * `ste/protocol.py` supplies prompts, variants, limits, and version values.
+* `ste/models/catalog.py` is the single list of selectable model identifiers, labels, prices, and cost-calibration anchors. `GET /api/models` serves it to the browser.
 * `ste/runs/` supplies snapshots, backend detection, and conditional object leases.
 * `ste/records.py` validates record input and the legacy format.
 * `originals/` contains historical reference programs. The package build and Ruff exclude these files.

@@ -2,6 +2,8 @@
 
 from types import MappingProxyType
 
+from ste.models.catalog import ALLOWED_MODELS as CATALOG_MODELS
+
 # These versions are persisted on every run and observation.  Schema changes
 # describe representation; protocol and scoring changes describe semantics.
 SCHEMA_VERSION = 2
@@ -80,15 +82,8 @@ DEFAULT_SESSIONS_PER_BATCH = 6
 DEFAULT_MAX_BATCHES = 6
 
 # Model policy is an explicit allow-list because callers supply paid credentials.
-# Exact OpenRouter identifiers keep each experiment reproducible as aliases move.
-ALLOWED_MODELS = frozenset(
-    {
-        "anthropic/claude-haiku-4.5",
-        "openai/gpt-5.6-luna",
-        "google/gemini-3.8-flash",
-        "meta-llama/llama-4-maverick",
-    }
-)
+# It is re-exported from the model catalog, which is the only list of identifiers.
+ALLOWED_MODELS = CATALOG_MODELS
 
 # Required record fields define the durable analytical contract in one place.
 RECORD_FIELDS = frozenset(
