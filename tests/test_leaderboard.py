@@ -203,7 +203,8 @@ def test_rows_rank_by_named_score_without_rules_and_show_runtime():
     rendered = render_leaderboard(records)
 
     assert rendered.index('data-model="a-high"') < rendered.index('data-model="z-low"')
-    assert '<th scope="row" aria-label="Rank 1">1</th><td>a-high</td><td>60.0' in rendered
+    # Rank remains ordinary tabular data while the model identifies every metric in its row.
+    assert '<td>1</td><th scope="row">a-high</th><td>60.0' in rendered
     assert "<th>Protocol version</th>" not in rendered
     assert "<th>Scoring version</th>" not in rendered
     assert "<td>2m 0s</td>" in rendered

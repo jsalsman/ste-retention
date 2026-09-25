@@ -284,7 +284,7 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         rows.append(
             f'<tr data-model="{safe_model}" data-protocol="{safe_protocol}" '
             f'data-scoring="{safe_scoring}">'
-            f'<th scope="row" aria-label="Rank {rank}">{rank}</th><td>{safe_model}</td>'
+            f'<td>{rank}</td><th scope="row">{safe_model}</th>'
             f"<td>{cells[0]}</td><td>{cells[1]}</td><td>{cells[2]}</td>"
             f"<td>{cells[3]}</td><td>{cells[4]}</td>"
             f"<td>{len(contrasts)}</td>"
