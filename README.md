@@ -308,6 +308,8 @@ The `ste.research` CLI with `--state` remains file-based and takes no lease. Do 
 
 The leaderboard reads only complete research snapshots. It excludes preview and incomplete research runs. It separates records with different protocol and scoring versions.
 
+The leaderboard presents its results before the uncertainty guidance in a dedicated dark dashboard theme. The experiment form retains its lighter visual treatment, while the leaderboard uses high-contrast cards and a horizontally scrollable comparison table.
+
 ## Browser behavior and accessibility
 
 During a request, the page shows `static/loading.gif` in an accessible overlay. The page gives text status. It shows an approximate ETA only after sufficient measured work.

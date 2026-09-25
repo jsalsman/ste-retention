@@ -48,6 +48,17 @@ def test_factorial_main_effects_average_both_levels():
     assert "+25.0" in rendered
 
 
+def test_results_precede_uncertainty_in_dark_dashboard():
+    """Place the prominently styled leaderboard before its interpretation guidance."""
+    # A dedicated body class scopes the dark dashboard without changing the experiment form.
+    # Landmark headings make the visual reordering equally clear to assistive technology.
+    rendered = render_leaderboard([])
+
+    assert '<body class="leaderboard-page">' in rendered
+    assert '<h2 id="results-title">Leaderboard</h2>' in rendered
+    assert rendered.index('id="results-title"') < rendered.index('id="uncertainty"')
+
+
 def test_intervals_use_complete_cell_baselines_and_paired_effects():
     """Calculate baseline and all contrasts per repeated matched cell before intervals."""
     # Two repetitions in one durable coordinate exercise repeated paired observations.

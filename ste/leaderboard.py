@@ -79,8 +79,8 @@ def _estimate_cell(summary: tuple[float, float | None, float | None], *, signed:
     return f"{estimate} (95% CI {format(lower, format_spec)} to {format(upper, format_spec)})"
 
 
-def _render_explanation() -> str:
-    """Return accessible definitions and accurate interpretation guidance for the estimates."""
+def _render_explanation() -> tuple[str, str]:
+    """Return separate study-context and uncertainty sections for flexible page ordering."""
     # Definition markup is static and the global definitions contain only trusted text.
     definitions = "".join(
         f"<dt>{term}</dt><dd>{description}</dd>" for term, description in METRIC_DEFINITIONS
@@ -119,8 +119,9 @@ def _render_explanation() -> str:
         "as independent; this is not a hierarchical analysis across runs or other "
         "levels.</p></section>"
     )
-    # Separate blocks keep the HTML construction reviewable without a template engine.
-    return experiment + uncertainty
+    # Returning separate blocks lets the results lead directly into their interpretation.
+    # The ordering remains explicit at the document assembly point below.
+    return experiment, uncertainty
 
 
 def _render_table(rows: list[str]) -> str:
@@ -233,14 +234,24 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
             f"<td>{len(contrasts)}</td></tr>"
         )
     label = "Synthetic preview — not experimental data" if synthetic else "Experiment results"
+    # Keep the primary leaderboard above the supporting uncertainty detail so visitors
+    # encounter the requested results immediately after learning what each metric means.
+    experiment, uncertainty = _render_explanation()
     # The outer document stays standalone while focused helpers build its substantial blocks.
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{html.escape(label)}</title>"
         '<link rel="stylesheet" href="/static/styles.css"></head>'
-        f'<body><main><p><a href="/">Back to experiment</a></p><h1>{html.escape(label)}</h1>'
-        f"{_render_explanation()}{_render_table(rows)}</main></body></html>"
+        '<body class="leaderboard-page"><main class="leaderboard-shell">'
+        '<a class="back-link" href="/">← Back to experiment</a>'
+        '<header class="leaderboard-hero"><p class="eyebrow">Research dashboard</p>'
+        f'<h1>{html.escape(label)}</h1><p class="leaderboard-intro">Compare controlled-language '
+        "prompt strategies with paired effects and confidence intervals.</p></header>"
+        f'{experiment}<section class="leaderboard-results" aria-labelledby="results-title">'
+        '<div class="section-heading"><p class="eyebrow">Measured outcomes</p>'
+        '<h2 id="results-title">Leaderboard</h2></div>'
+        f"{_render_table(rows)}</section>{uncertainty}</main></body></html>"
     )
 
 
