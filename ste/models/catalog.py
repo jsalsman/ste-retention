@@ -31,7 +31,9 @@ class ModelSpec:
     def free(self) -> bool:
         """Return whether the listed base price has no per-token charge."""
         # Free OpenRouter variants list zero for both directions.
-        return self.input_usd_per_token == 0 and self.output_usd_per_token == 0
+        no_input_charge = self.input_usd_per_token == 0
+        # A zero prompt price alone does not make a model free.
+        return no_input_charge and self.output_usd_per_token == 0
 
 
 # Date when every identifier and price below matched OpenRouter's live catalog.
@@ -92,6 +94,7 @@ def catalog_payload() -> dict:
     # Menu order is preserved because the first model is the default selection.
     models = [
         {
+            # Field names are short because the browser reads them directly.
             "id": spec.id,
             "label": spec.label,
             "input": spec.input_usd_per_token,
@@ -105,6 +108,7 @@ def catalog_payload() -> dict:
         bound: {"model": model_id, "label": MODELS_BY_ID[model_id].label, "usd": usd}
         for bound, (model_id, usd) in COST_OBSERVATIONS.items()
     }
+    # The verification date lets the browser say how current its prices are.
     return {
         "verified_on": PRICES_VERIFIED_ON,
         "models": models,

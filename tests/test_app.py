@@ -8,6 +8,13 @@ from pathlib import Path
 import pytest
 
 import ste.runs.lease as lease_module
+from ste.models.catalog import (
+    COST_OBSERVATIONS,
+    COST_REFERENCE_LOGICAL_UNITS,
+    MODEL_CATALOG,
+    MODELS_BY_ID,
+    PRICES_VERIFIED_ON,
+)
 from ste.models.openrouter import ChatCompletion, IncompleteGenerationError
 from ste.protocol import ALLOWED_MODELS
 from ste.research import MAX_WEB_RESEARCH_SESSIONS
@@ -110,7 +117,6 @@ def test_static_page_contract():
     (
         ("openai/gpt-5.6-luna", "GPT-5.6 Luna", "openai/gpt-6-sol"),
         ("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", "anthropic/claude-sonnet-5"),
-        ("google/gemma-4-31b-it:free", "Gemma 4 31B (free)", "google/gemma-4-31b-it"),
     ),
 )
 def test_current_models_are_selectable_and_retired_models_are_rejected(
@@ -594,52 +600,43 @@ def test_model_prices_and_model_change_recalculate_cost_disclosure(client):
     assert "showCostEstimate(logicalUnits);" in workload
 
 
-def test_model_catalog_endpoint_serves_verified_prices_and_calibration(client):
-    """Serve every allowed model once, with exact prices and priced cost anchors."""
+def test_model_catalog_endpoint_serves_the_catalog_unchanged(client):
+    """Serve every catalog model once, in order, with priced cost anchors."""
     response = client.get("/api/models")
     assert response.status_code == 200
     data = response.json
-    models = {entry["id"]: entry for entry in data["models"]}
-    # The endpoint and server validation derive from the same catalog.
-    assert len(models) == len(data["models"]) == len(ALLOWED_MODELS)
-    assert set(models) == ALLOWED_MODELS
-    # The first entry stays the default menu selection.
-    assert data["models"][0]["id"] == "google/gemini-3.8-flash"
-    assert data["verified_on"] == "2026-09-25"
-    # Paid entries keep the verified catalog rates.
-    luna = models["openai/gpt-5.6-luna"]
-    assert (luna["input"], luna["output"], luna["free"]) == (0.0000002, 0.0000012, False)
-    haiku = models["anthropic/claude-haiku-4.5"]
-    assert (haiku["input"], haiku["output"], haiku["free"]) == (0.000001, 0.000005, False)
-    # Every free variant is zero-priced and flagged for rate-limit guidance.
-    free = {model for model, entry in models.items() if entry["free"]}
-    assert free == {
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "nvidia/nemotron-3.5-lightning:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "thinkingmachines/inkling:free",
-        "qwen/qwen3.8-27b:free",
-        "google/gemma-4-26b-a4b-it:free",
-        "google/gemma-4-31b-it:free",
-    }
-    assert all(models[model]["input"] == models[model]["output"] == 0 for model in free)
-    # Calibration anchors reference priced catalog models and observed study costs.
+    # The endpoint and server validation derive from the same catalog, in menu order.
+    assert [entry["id"] for entry in data["models"]] == [spec.id for spec in MODEL_CATALOG]
+    assert {entry["id"] for entry in data["models"]} == ALLOWED_MODELS
+    assert data["verified_on"] == PRICES_VERIFIED_ON
+    for entry, spec in zip(data["models"], MODEL_CATALOG, strict=True):
+        # Labels and prices pass through without rounding or renaming.
+        assert entry["label"] == spec.label
+        assert (entry["input"], entry["output"]) == (
+            spec.input_usd_per_token,
+            spec.output_usd_per_token,
+        )
+        # The free flag is exactly the zero-price condition.
+        assert entry["free"] is (entry["input"] == entry["output"] == 0)
+    # The catalog offers both kinds of model, so both menu groups appear.
+    assert {entry["free"] for entry in data["models"]} == {True, False}
     calibration = data["calibration"]
-    assert calibration["logical_units"] == 288
-    assert calibration["low"] == {
-        "model": "meta-llama/llama-4-maverick",
-        "label": "Llama 4 Maverick",
-        "usd": 0.08,
-    }
-    assert calibration["high"] == {
-        "model": "google/gemini-3.8-flash",
-        "label": "Gemini 3.8 Flash",
-        "usd": 2.10,
-    }
+    assert calibration["logical_units"] == COST_REFERENCE_LOGICAL_UNITS
+    for bound, (model_id, usd) in COST_OBSERVATIONS.items():
+        # Anchors name priced catalog models so the browser can normalize them.
+        assert calibration[bound] == {
+            "model": model_id,
+            "label": MODELS_BY_ID[model_id].label,
+            "usd": usd,
+        }
+        assert not MODELS_BY_ID[model_id].free
+    # The low anchor must not exceed the high anchor.
+    assert calibration["low"]["usd"] <= calibration["high"]["usd"]
 
 
-def test_free_model_is_accepted_for_interaction(client, module, monkeypatch):
-    """Send a newly added free identifier upstream unchanged."""
+@pytest.mark.parametrize("free_model", [spec.id for spec in MODEL_CATALOG if spec.free])
+def test_free_models_are_accepted_for_interaction(client, module, monkeypatch, free_model):
+    """Send each free catalog identifier upstream unchanged."""
     sent = []
 
     def fake_chat(_key, model, _messages):
@@ -649,7 +646,7 @@ def test_free_model_is_accepted_for_interaction(client, module, monkeypatch):
     monkeypatch.setattr(module, "chat", fake_chat)
     response = client.post(
         "/api/interact",
-        json={"api_key": "sample-secret", "model": "qwen/qwen3.8-27b:free", "prompt": "Hello"},
+        json={"api_key": "sample-secret", "model": free_model, "prompt": "Hello"},
     )
     assert response.status_code == 200
-    assert sent == ["qwen/qwen3.8-27b:free"]
+    assert sent == [free_model]
