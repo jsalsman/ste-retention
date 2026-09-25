@@ -24,16 +24,17 @@ from ste.protocol import (
 from ste.scoring import load_approved_words, parse_judge_score, score_text
 
 # Research limits protect unattended jobs without inheriting the web preview's
-# limits. The paid-request ceiling includes every allowed continuation attempt,
-# while logical-unit totals remain suitable for checkpoint progress reporting.
-MAX_RESEARCH_SESSIONS = 10_000
-MAX_RESEARCH_DEPTH = 128
-MAX_RESEARCH_CALLS = 1_000_000
+# limits. One hundred sessions permit substantial replication, while the 20,000
+# paid-request ceiling bounds worst-case continuations and multi-model CLI work.
+MAX_RESEARCH_SESSIONS = 100
+MAX_RESEARCH_DEPTH = len(PROMPT_POOL)
+MAX_RESEARCH_CALLS = 20_000
 MAX_REQUESTS_PER_UNIT = MAX_CONTINUATIONS + 1
 # The web study fixes one model, no judge, four variants, and the default deepest
-# turn, so this derived bound is the largest session count below the paid ceiling.
-MAX_WEB_RESEARCH_SESSIONS = MAX_RESEARCH_CALLS // (
-    len(VARIANTS) * max(DEFAULT_RESEARCH_DEPTHS) * MAX_REQUESTS_PER_UNIT
+# turn. Its bound respects both the general session and paid-request ceilings.
+MAX_WEB_RESEARCH_SESSIONS = min(
+    MAX_RESEARCH_SESSIONS,
+    MAX_RESEARCH_CALLS // (len(VARIANTS) * max(DEFAULT_RESEARCH_DEPTHS) * MAX_REQUESTS_PER_UNIT),
 )
 
 
@@ -61,15 +62,13 @@ class ResearchConfig:
             raise ValueError("At least one probe depth is required.")
         # Validate every value before sorting so malformed mixed types fail predictably.
         # Exact integer checks also reject booleans, which otherwise behave like 0 and 1.
-        if any(
-            type(depth) is not int or not 1 <= depth <= MAX_RESEARCH_DEPTH for depth in self.depths
-        ):
+        if any(type(depth) is not int or depth < 1 for depth in self.depths):
             raise ValueError("Research depth is out of range.")
         if tuple(sorted(set(self.depths))) != self.depths:
             raise ValueError("Probe depths must be unique values in ascending order.")
         # The current protocol presents each pool entry at most once per session.
         # A future protocol must be versioned before it may deliberately repeat prompts.
-        if self.depths[-1] > len(PROMPT_POOL):
+        if self.depths[-1] > MAX_RESEARCH_DEPTH:
             raise ValueError("Research depth exceeds the non-repeating prompt pool.")
         if self.judge_model is not None and self.judge_model not in ALLOWED_MODELS:
             raise ValueError("The judge model must be supported.")
