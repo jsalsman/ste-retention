@@ -149,8 +149,6 @@
     } catch (error) {
       status.textContent = error.name === "AbortError" ? "Request cancelled." : "The request could not be completed.";
       result.textContent = "No response is available.";
-    } finally {
-      key.value = "";
     }
   }
 
@@ -249,8 +247,7 @@
     } catch (error) {
       document.querySelector("#experiment-status").textContent = error.name === "AbortError" ? "Experiment cancelled." : "The experiment disconnected or stopped safely.";
     } finally {
-      // Clearing both references minimizes accidental credential retention.
-      key.value = "";
+      // Keep the masked key available for another request while releasing request state.
       controller = null;
       setRunning(false);
     }

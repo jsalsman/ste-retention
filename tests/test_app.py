@@ -99,6 +99,8 @@ def test_static_page_contract():
     assert "result.textContent = data.answer" in script
     assert "displayed text may be truncated" in script
     assert "result.innerHTML" not in script
+    # The masked credential remains available for retries and subsequent workflows.
+    assert 'key.value = ""' not in script
 
 
 def test_leaderboard_missing_and_available(client, module, tmp_path, monkeypatch):

@@ -137,6 +137,8 @@ Start the development server.
 ```
 
 Open the root page and enter an OpenRouter key. Select a model and an experiment type.
+The page keeps the key in its masked password field for subsequent requests. It does
+not place the key in browser storage; clear the field or close the page to remove it.
 
 For every interaction, the server validates both the returned message text and
 the provider's finish reason. Each generation allows 8,192 output tokens per call.
