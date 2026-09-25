@@ -449,10 +449,18 @@
   }
 
   /**
+   * Monotonic token for run-status lookups. clearRunStatus() advances it so a lookup
+   * started before a handle change or a new experiment cannot display its stale result.
+   */
+  let runStatusGeneration = 0;
+
+  /**
    * Remove any displayed run-status check so it cannot describe a different run ID.
    * Called when the resume handle changes or a new experiment request begins.
    */
   function clearRunStatus() {
+    // Advancing the generation makes every outstanding lookup discard its late response.
+    runStatusGeneration += 1;
     // Empty text keeps the live region present without announcing stale details.
     document.querySelector("#run-status").textContent = "";
   }
@@ -467,18 +475,20 @@
       status.textContent = "Enter a valid 32-character run ID first.";
       return;
     }
+    // Capture this lookup's generation before any asynchronous work begins.
+    const generation = runStatusGeneration;
     status.textContent = "Checking the saved run heartbeat…";
     try {
       const response = await fetch(`/api/experiments/${encodeURIComponent(runId)}/status`, {headers:{"Accept":"application/json"}});
       const data = await response.json();
       if (!response.ok) throw new Error("Status lookup failed.");
-      // Discard a late response if the handle changed while the lookup was in flight.
-      if (document.querySelector("#resume-run-id").value.trim() !== runId) return;
+      // Discard a late response if the handle changed or a run started during the lookup.
+      if (generation !== runStatusGeneration) return;
       // Only fixed server status and numeric counts are rendered, always through textContent.
       status.textContent = `Run is ${data.liveness}; ${data.completed} of ${data.total} work units are durable.`;
     } catch (_error) {
-      // Report failure only while the checked handle is still the one entered.
-      if (document.querySelector("#resume-run-id").value.trim() !== runId) return;
+      // Report failure only while no handle change or new run has superseded this lookup.
+      if (generation !== runStatusGeneration) return;
       status.textContent = "The saved run status is unavailable.";
     }
   }
