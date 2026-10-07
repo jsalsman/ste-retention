@@ -154,11 +154,12 @@ model identifiers, menu labels, and token prices. The page fetches it from
 `GET /api/models`, and server validation uses the same catalog. Each menu option
 shows the label, the exact identifier, and for paid models the input and output
 prices per million tokens. It currently
-offers five paid models (Gemini 3.8 Flash, GPT-5.6 Luna, Claude Haiku 4.5,
-Llama 4 Maverick, and DeepSeek V4 Flash 0731) and seven zero-priced `:free` variants (Nemotron 3 Ultra,
+offers six paid models (Gemini 3.8 Flash, GPT-5.6 Luna, Claude Haiku 4.5,
+Claude Haiku 5.5, Llama 4 Maverick, and DeepSeek V4 Flash 0731) and seven zero-priced `:free` variants (Nemotron 3 Ultra,
 Nemotron 3.5 Lightning, Nemotron 3 Super, Inkling, Qwen3.8 27B, Gemma 4 26B A4B,
 and Gemma 4 31B). These exact OpenRouter model identifiers and prices were
-verified against the provider catalog on 2026-09-25. Exact identifiers make a
+verified against the provider catalog on 2026-09-25, except Claude Haiku 5.5,
+which was added and verified on 2026-10-07. Exact identifiers make a
 study more reproducible than moving `latest` aliases, but the catalog can change.
 Verify availability before you start a large study.
 

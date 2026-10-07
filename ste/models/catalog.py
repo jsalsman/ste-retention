@@ -49,6 +49,9 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec("google/gemini-3.8-flash", "Gemini 3.8 Flash", 0.00000075, 0.00000375),
     ModelSpec("openai/gpt-5.6-luna", "GPT-5.6 Luna", 0.0000002, 0.0000012),
     ModelSpec("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", 0.000001, 0.000005),
+    # Released and price-verified on 2026-10-07, after PRICES_VERIFIED_ON; the exact
+    # identifier is preferred over the moving ~anthropic/claude-haiku-latest alias.
+    ModelSpec("anthropic/claude-haiku-5.5", "Claude Haiku 5.5", 0.0000001, 0.0000005),
     ModelSpec("meta-llama/llama-4-maverick", "Llama 4 Maverick", 0.0000001875, 0.0000006525),
     # Dated DeepSeek release, preferred over the moving ~deepseek-v4-flash-latest alias.
     ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 0.00000003, 0.00000032),
