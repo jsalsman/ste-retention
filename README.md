@@ -155,11 +155,12 @@ model identifiers, menu labels, and token prices. The page fetches it from
 shows the label, the exact identifier, and for paid models the input and output
 prices per million tokens. It currently
 offers six paid models (Gemini 3.8 Flash, GPT-5.6 Luna, Claude Haiku 4.5,
-Claude Haiku 5.5, Llama 4 Maverick, and DeepSeek V4 Flash 0731) and seven zero-priced `:free` variants (Nemotron 3 Ultra,
-Nemotron 3.5 Lightning, Nemotron 3 Super, Inkling, Qwen3.8 27B, Gemma 4 26B A4B,
-and Gemma 4 31B). These exact OpenRouter model identifiers and prices were
-verified against the provider catalog on 2026-09-25, except Claude Haiku 5.5,
-which was added and verified on 2026-10-07. Exact identifiers make a
+Claude Haiku 5.5, Llama 4 Maverick, and DeepSeek V4 Flash 0731) and six
+zero-priced `:free` variants (Nemotron 3 Ultra, Nemotron 3.5 Lightning,
+Nemotron 3 Super, Inkling, Gemma 4 26B A4B, and Gemma 4 31B). These exact
+OpenRouter model identifiers and prices were verified against the provider
+catalog on 2026-10-07; Qwen3.8 27B (free) was removed then because OpenRouter
+no longer lists it. Exact identifiers make a
 study more reproducible than moving `latest` aliases, but the catalog can change.
 Verify availability before you start a large study.
 
@@ -230,7 +231,7 @@ Before a run, calculate both logical units and the maximum provider-request coun
 
 The CLI `--budget-usd` option records the operator's approved value. The application does not enforce this value against live provider charges. Set a provider-side spending limit at or below the approved amount.
 
-The web form recalculates the logical-generation count, maximum paid provider-request count, and a rough model-specific cost range when the user changes the model, preview turns, batches, or research sessions. Prices were verified against OpenRouter's live catalog on 2026-09-25. The narrower range is calibrated from completed 288-logical-unit studies that cost $0.08 with Llama 4 Maverick and $2.10 with Gemini 3.8 Flash. It normalizes those observations by each reference model's combined base input/output price, then scales them by the selected model's combined base price and the selected logical workload. This is an empirical planning range, not a quote or spending cap: input/output mix, response length, continuations, and routing can differ. The application caps research at 100 sessions and 20,000 worst-case paid provider requests; the web study reaches 19,200 requests at that session maximum. For a free variant, the form shows a $0.00 estimate with a rate-limit warning instead of a range. The user who enters the OpenRouter key accepts the provider charges and should set a provider-side spending limit.
+The web form recalculates the logical-generation count, maximum paid provider-request count, and a rough model-specific cost range when the user changes the model, preview turns, batches, or research sessions. Prices were verified against OpenRouter's live catalog on 2026-10-07. The narrower range is calibrated from completed 288-logical-unit studies that cost $0.08 with Llama 4 Maverick and $2.10 with Gemini 3.8 Flash. It normalizes those observations by each reference model's combined base input/output price, then scales them by the selected model's combined base price and the selected logical workload. This is an empirical planning range, not a quote or spending cap: input/output mix, response length, continuations, and routing can differ. The application caps research at 100 sessions and 20,000 worst-case paid provider requests; the web study reaches 19,200 requests at that session maximum. For a free variant, the form shows a $0.00 estimate with a rate-limit warning instead of a range. The user who enters the OpenRouter key accepts the provider charges and should set a provider-side spending limit.
 
 ## The files
 
