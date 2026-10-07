@@ -634,14 +634,25 @@ def test_model_catalog_endpoint_serves_the_catalog_unchanged(client):
     assert calibration["low"]["usd"] <= calibration["high"]["usd"]
 
 
+def test_claude_haiku_5_5_is_a_pinned_paid_choice():
+    """Offer the exact Claude Haiku 5.5 identifier at its verified catalog price."""
+    spec = MODELS_BY_ID["anthropic/claude-haiku-5.5"]
+    # The exact identifier is selectable; the moving alias is not.
+    assert spec.id in ALLOWED_MODELS
+    assert "~anthropic/claude-haiku-latest" not in ALLOWED_MODELS
+    # Prices match the 2026-10-07 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000001, 0.0000005)
+    assert not spec.free
+
+
 def test_deepseek_v4_flash_is_a_pinned_paid_choice():
     """Offer the dated DeepSeek V4 Flash release at its verified catalog price."""
     spec = MODELS_BY_ID["deepseek/deepseek-v4-flash-0731"]
     # The dated identifier is selectable; the moving alias is not.
     assert spec.id in ALLOWED_MODELS
     assert "~deepseek/deepseek-v4-flash-latest" not in ALLOWED_MODELS
-    # Prices match the 2026-09-25 OpenRouter catalog, so it is a paid model.
-    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.00000003, 0.00000032)
+    # Prices match the 2026-10-07 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.000000018, 0.00000128)
     assert not spec.free
 
 
