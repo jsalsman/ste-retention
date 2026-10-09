@@ -729,3 +729,14 @@ def test_research_stop_reason_is_streamed_saved_and_reported(client, module, mon
     status = client.get(f"/api/experiments/{run_id}/status").json
     assert status["liveness"] == "stalled" and "HTTP 403" in status["stop_reason"]
     assert "sample-secret" not in response.text
+
+
+def test_browser_keeps_server_stop_reasons_visible():
+    """Never replace a server-reported stop or refusal reason with the generic text."""
+    script = (ROOT / "static" / "app.js").read_text()
+    # Stream error events and pre-stream refusals both mark their message as reported.
+    assert script.count("failure.reported = true;") == 2
+    assert 'document.querySelector("#experiment-status").textContent = detail.error;' in script
+    # The generic fallback is used only when no reason was reported.
+    fallback = script.index('"The experiment disconnected or stopped safely."')
+    assert script.rindex("if (!error.reported) {", 0, fallback) > 0

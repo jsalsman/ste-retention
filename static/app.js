@@ -394,13 +394,29 @@
       // Keep the durable count and resume handle useful for either experiment mode.
       result.textContent = `Run ID: ${event.run_id}\nCompleted ${event.total} durable work units. ${destination}`;
     }
-    if (event.type === "error") throw new Error("Stream reported an error.");
+    if (event.type === "error") {
+      // The status line already shows the server's stop reason; mark it as reported
+      // so the caller's generic fallback does not overwrite it.
+      const failure = new Error("Stream reported an error.");
+      failure.reported = true;
+      throw failure;
+    }
     return event.type === "success" || event.type === "error";
   }
 
   /** Parse arbitrary stream chunks while retaining the submitted experiment mode. */
   async function consumeStream(response, submittedMode) {
-    if (!response.ok || !response.body) throw new Error("Streaming is unavailable.");
+    if (!response.ok || !response.body) {
+      // Refusals before streaming carry a fixed server message, such as a settings mismatch.
+      const failure = new Error("Streaming is unavailable.");
+      const detail = await response.json().catch(() => null);
+      if (detail && typeof detail.error === "string") {
+        // textContent keeps the server's text inert; it is shown instead of the fallback.
+        document.querySelector("#experiment-status").textContent = detail.error;
+        failure.reported = true;
+      }
+      throw failure;
+    }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -440,7 +456,10 @@
       const response = await fetch("/api/experiments/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body), signal:controller.signal});
       await consumeStream(response, submittedMode);
     } catch (error) {
-      document.querySelector("#experiment-status").textContent = error.name === "AbortError" ? "Experiment cancelled." : "The experiment disconnected or stopped safely.";
+      // Keep a reason the server already reported; otherwise show the generic fallback.
+      if (!error.reported) {
+        document.querySelector("#experiment-status").textContent = error.name === "AbortError" ? "Experiment cancelled." : "The experiment disconnected or stopped safely.";
+      }
     } finally {
       // Keep the masked key available for another request while releasing request state.
       controller = null;
