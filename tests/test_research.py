@@ -404,3 +404,36 @@ def test_estimate_rebuilds_conversation_input_and_prices_with_catalog():
 def test_estimate_is_unavailable_without_priced_complete_units(units):
     """Return no estimate for empty runs, uncatalogued models, or damaged units."""
     assert estimate_run_cost({"units": units}) is None
+
+
+def test_reported_cost_is_persisted_before_the_reply_is_validated():
+    """Save a reported charge even when the request then fails before its checkpoint."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "c" * 32)
+    snapshots = []
+
+    def request(_key, _model, _messages, *, on_attempt, on_cost, **_options):
+        """Report a charge, then fail as a filtered or malformed reply would."""
+        on_attempt()
+        on_cost(0.4)
+        raise IncompleteGenerationError("", "content_filter")
+
+    with pytest.raises(IncompleteGenerationError):
+        list(
+            run_research(
+                "secret",
+                config,
+                state,
+                lambda value: snapshots.append(json.loads(json.dumps(value))),
+                request=request,
+            )
+        )
+
+    # The last durable snapshot already holds the charge and its priced attempt.
+    assert snapshots[-1]["provider_cost_usd"] == pytest.approx(0.4)
+    assert snapshots[-1]["costed_request_attempts"] == snapshots[-1]["paid_request_attempts"] == 1
+
+
+def test_estimate_is_unavailable_for_unknown_unit_kinds():
+    """Refuse an estimate rather than silently skipping a request it cannot price."""
+    assert estimate_run_cost({"units": [{"kind": "mystery"}]}) is None

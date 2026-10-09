@@ -253,9 +253,10 @@ def run_research(
         persist(state)
 
     def account_cost(cost: float) -> None:
-        """Add one provider-reported charge to the run's cost total.
+        """Add one provider-reported charge to the run's cost total and persist it.
 
-        The total is persisted with the next checkpoint. Snapshots that predate
+        Persisting at once keeps the charge even when the response then fails
+        validation and the run stops before its next checkpoint. Snapshots that predate
         cost tracking lack the counters and are left untouched, so a resumed
         legacy run never claims a total that omits its earlier requests.
         """
@@ -265,6 +266,8 @@ def run_research(
         state["provider_cost_usd"] += cost
         # Matching this count to paid attempts proves every request was priced.
         state["costed_request_attempts"] += 1
+        # A charge that was reported must survive an exit before the next checkpoint.
+        persist(state)
 
     for model in config.models:
         for session in range(1, config.sessions + 1):

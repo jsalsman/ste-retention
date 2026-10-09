@@ -70,6 +70,9 @@ def estimate_run_cost(state: dict) -> float | None:
             conversations.setdefault(key, []).append(unit)
         elif unit.get("kind") == "judge":
             judges.append(unit)
+        else:
+            # An unrecognized request cannot be priced, so any total would be too low.
+            return None
     total = 0.0
     # Judge units save only the score, so the mean reply length stands in for theirs.
     reply_lengths: list[int] = []
