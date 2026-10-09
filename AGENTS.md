@@ -11,6 +11,7 @@
 - Restore controls and hide the overlay after success, failure, cancellation, disconnection, or premature closure.
 - Do not introduce percentage displays, completion bars, or progress elements.
 - Pass credentials explicitly, redact them from every output, and never persist or log them.
+- When a run stops early, save, show, and log a `stop_reason` from `ste/runs/stop.py`. Build reasons only from fixed text, HTTP status numbers, and exception class names; never include provider response bodies, exception messages from outside this codebase, model output, or credentials.
 - Do not add application authentication or authorization. Run IDs are unguessable resume handles, not access-control identities.
 - Bound preview web work below the deployment request timeout with a safety margin.
 - The web form can stream the full `ste.research` study. Keep it resumable because request timeouts can interrupt it. Recommend a Cloud Run Job for unattended studies.

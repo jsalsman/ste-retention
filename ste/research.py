@@ -40,6 +40,15 @@ MAX_WEB_RESEARCH_SESSIONS = min(
 )
 
 
+class PaidRequestCeilingError(RuntimeError):
+    """Report that a run has used every paid request its disclosed workload allows."""
+
+    def __init__(self) -> None:
+        """Create the error with its fixed, display-safe message."""
+        # The message is constant, so it can be saved and shown as a stop reason.
+        super().__init__("The run reached the paid-request ceiling for its disclosed workload.")
+
+
 @dataclass(frozen=True)
 class ResearchConfig:
     """Describe one immutable research run and all resume-critical settings."""
@@ -247,7 +256,7 @@ def run_research(
         paid_attempts = state.get("paid_request_attempts", 0)
         if type(paid_attempts) is not int or paid_attempts >= maximum_attempts:
             # Stop before another request can exceed the confirmed workload ceiling.
-            raise RuntimeError("The paid-provider request ceiling was reached.")
+            raise PaidRequestCeilingError()
         state["paid_request_attempts"] = paid_attempts + 1
         # This checkpoint contains no credential and precedes the external request.
         persist(state)

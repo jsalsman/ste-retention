@@ -184,3 +184,75 @@ def test_chat_skips_missing_or_invalid_costs(monkeypatch, usage):
 
     # The callback stays silent, so callers treat the charge as unknown.
     assert costs == []
+
+
+def _http_error(status):
+    """Build a requests HTTPError whose response carries a status and a secret body."""
+    response = requests.Response()
+    response.status_code = status
+    # The body must never leak into the reason, so it holds a recognizable marker.
+    response._content = b'{"error":{"message":"provider-secret-body"}}'
+    return requests.HTTPError(response=response)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (_http_error(403), "HTTP 403: the API key reached its own spending limit"),
+        (_http_error(429), "HTTP 429: requests are being rate limited"),
+        (_http_error(418), "HTTP 418."),
+        (requests.Timeout("secret"), "did not respond within the time limit"),
+        (requests.ConnectionError("secret"), "could not connect to OpenRouter"),
+    ],
+)
+def test_upstream_errors_carry_safe_specific_reasons(monkeypatch, failure, expected):
+    """Explain transport failures using only fixed text and the HTTP status number."""
+    response = Mock()
+    # raise_for_status reproduces how requests reports a non-2xx reply.
+    response.raise_for_status.side_effect = failure
+    post = Mock(side_effect=failure) if not isinstance(failure, requests.HTTPError) else None
+    monkeypatch.setattr(openrouter.requests, "post", post or Mock(return_value=response))
+
+    with pytest.raises(openrouter.UpstreamError) as caught:
+        openrouter.chat("secret", "model", [{"role": "user", "content": "Hi"}])
+
+    assert expected in caught.value.reason
+    # The public message is unchanged, and neither text leaks the body or key.
+    assert str(caught.value) == "OpenRouter could not complete the request."
+    assert "provider-secret-body" not in caught.value.reason
+    assert "secret" not in caught.value.reason
+
+
+def test_empty_and_filtered_replies_have_specific_reasons(monkeypatch):
+    """Name empty replies and provider filtering rather than a generic failure."""
+    empty = _response({"choices": [{"message": {"content": " "}, "finish_reason": "stop"}]})
+    monkeypatch.setattr(openrouter.requests, "post", Mock(return_value=empty))
+    with pytest.raises(openrouter.UpstreamError) as caught:
+        openrouter.chat("secret", "model", [])
+    assert caught.value.reason == "OpenRouter returned an empty reply."
+
+    filtered = _response(
+        {"choices": [{"message": {"content": "Partial"}, "finish_reason": "content_filter"}]}
+    )
+    monkeypatch.setattr(openrouter.requests, "post", Mock(return_value=filtered))
+    with pytest.raises(openrouter.IncompleteGenerationError) as caught:
+        openrouter.chat("secret", "model", [])
+    assert caught.value.reason == "The provider filtered the model's reply."
+
+
+def test_key_limit_403_names_the_limit_and_the_fix(monkeypatch):
+    """Recognize OpenRouter's key-limit reply and say how to fix it, without echoing it."""
+    failure = requests.Response()
+    failure.status_code = 403
+    # This is OpenRouter's real reply when a key reaches its total spending limit.
+    failure._content = b'{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/abc","code":403}}'
+    response = Mock()
+    response.raise_for_status.side_effect = requests.HTTPError(response=failure)
+    monkeypatch.setattr(openrouter.requests, "post", Mock(return_value=response))
+
+    with pytest.raises(openrouter.UpstreamError) as caught:
+        openrouter.chat("secret", "model", [])
+
+    # The reason is the fixed text, and the provider's URL never appears in it.
+    assert caught.value.reason == openrouter.KEY_LIMIT_REASON
+    assert "workspaces" not in caught.value.reason

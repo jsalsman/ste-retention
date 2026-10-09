@@ -361,6 +361,8 @@ Do not put keys, request headers, prompts, replies, provider bodies, or licensed
 
 A full web study can exceed the deployment request limit. Resume after a timeout. For unattended work, run `python -m ste.research` in a Cloud Run Job.
 
+When a run stops early, the service records why. `ste/runs/stop.py` turns the exception into a short reason built only from fixed text, the HTTP status number, and the exception class name, for example "OpenRouter returned HTTP 403: the API key reached its own spending limit, or moderation refused the request." The reason is saved as `stop_reason` (with `stopped_at`) in the run's snapshot, shown in the stream's error message and in "Check run status" for a stalled run, and written to the service log with the run ID. It never contains the API key, provider response bodies, or model output, and it is cleared when the run resumes. OpenRouter returns HTTP 403 when a key reaches its own total spending limit even if the account still has credit; such requests fail within a second and do not appear on OpenRouter's Activity page. The adapter recognizes OpenRouter's "Key limit exceeded" phrase (without echoing the reply) and reports "the API key reached its own spending limit. Raise the key's limit on OpenRouter's Keys page, then resume the run."
+
 ## License
 
 See `LICENSE` for the software license. ASD-STE100 remains the property of ASD. This project gives no ASD approval or certification.
