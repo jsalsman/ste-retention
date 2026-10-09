@@ -21,13 +21,34 @@ JUDGE_REPLY_CHARS = len('{"score": 100}')
 
 
 def _tokens(characters: int) -> float:
-    """Convert a character count to an approximate token count."""
+    """Convert a character count to an approximate token count.
+
+    Args:
+        characters: Number of characters sent or received in one request.
+
+    Returns:
+        The character count divided by :data:`CHARS_PER_TOKEN`. Real tokenizers
+        differ by model and language, so this is only an approximation.
+
+    """
+    # One fixed ratio keeps estimates comparable across models and runs.
     # Fractional tokens are fine; only the final dollar total is displayed.
     return characters / CHARS_PER_TOKEN
 
 
 def _price(model: object, input_chars: int, output_chars: int) -> float | None:
-    """Price one request with catalog rates, or ``None`` for an unlisted model."""
+    """Price one request with current catalog rates.
+
+    Args:
+        model: The OpenRouter identifier saved with the request.
+        input_chars: Characters the request sent, including re-sent history.
+        output_chars: Characters the model returned.
+
+    Returns:
+        The estimated US-dollar charge, or ``None`` when the model is not in the
+        catalog and therefore has no price to apply.
+
+    """
     spec = MODELS_BY_ID.get(model) if isinstance(model, str) else None
     if spec is None:
         # Retired or unknown models have no trustworthy price to apply.
@@ -81,8 +102,11 @@ def estimate_run_cost(state: dict) -> float | None:
         if instruction is None:
             return None
         history_chars = 0
+        if any(type(unit.get("depth")) is not int for unit in turns):
+            # Damaged depths cannot be ordered, so the conversation cannot be rebuilt.
+            return None
         # Later turns re-send every earlier prompt and reply, so order by depth.
-        for unit in sorted(turns, key=lambda item: item.get("depth", 0)):
+        for unit in sorted(turns, key=lambda item: item["depth"]):
             prompt, reply = unit.get("prompt"), unit.get("response")
             if not isinstance(prompt, str) or not isinstance(reply, str):
                 return None

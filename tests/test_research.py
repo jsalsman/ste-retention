@@ -434,6 +434,23 @@ def test_reported_cost_is_persisted_before_the_reply_is_validated():
     assert snapshots[-1]["costed_request_attempts"] == snapshots[-1]["paid_request_attempts"] == 1
 
 
+def test_estimate_is_unavailable_for_malformed_depths():
+    """Return no estimate, rather than crash the leaderboard, for unsortable depths."""
+    units = [
+        {
+            "kind": "generation",
+            "model": "openai/gpt-5.6-luna",
+            "session_id": "s",
+            "variant": "bare",
+            "depth": depth,
+            "prompt": "p",
+            "response": "r",
+        }
+        for depth in (1, "2")
+    ]
+    assert estimate_run_cost({"units": units}) is None
+
+
 def test_estimate_is_unavailable_for_unknown_unit_kinds():
     """Refuse an estimate rather than silently skipping a request it cannot price."""
     assert estimate_run_cost({"units": [{"kind": "mystery"}]}) is None
