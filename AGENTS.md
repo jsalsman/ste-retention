@@ -15,7 +15,7 @@
 - Bound preview web work below the deployment request timeout with a safety margin.
 - The web form can stream the full `ste.research` study. Keep it resumable because request timeouts can interrupt it. Recommend a Cloud Run Job for unattended studies.
 - Escape external leaderboard values and validate every numeric chart or SVG input.
-- The leaderboard's last column is Total cost: OpenRouter's reported `usage.cost`, summed per run in `provider_cost_usd`. Show it only when `costed_request_attempts` equals `paid_request_attempts` for every contributing run, otherwise "Unavailable"; never add a partial total to a snapshot that predates cost tracking.
+- The leaderboard's last column is Total cost: OpenRouter's reported `usage.cost`, summed per run in `provider_cost_usd`. It is exact only when `costed_request_attempts` equals `paid_request_attempts`; otherwise `ste/costs.py` estimates the run from its saved text and the row must say "(estimated)". Show "Unavailable" when any run can be neither priced nor estimated, and never add a partial reported total to a snapshot that predates cost tracking.
 - The leaderboard dumbbell chart passes every coordinate through `_chart_x`, which validates and clamps it; keep the table as the exact data view, and write table intervals as `mean ± half-width` with the notation stated once in the headers and explained in the uncertainty section.
 - Preserve keyboard operation, semantic labels, live status, contrast, and reduced-motion support.
 - Mock all paid and external calls in tests, which belong under `tests/`.

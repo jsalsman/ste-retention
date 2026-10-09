@@ -26,6 +26,8 @@ from ste.research import (
     run_research,
     save_state,
 )
+from ste.costs import CHARS_PER_TOKEN, estimate_run_cost
+from ste.models.catalog import MODELS_BY_ID
 from ste.runs.store import completed_records
 from ste.scoring import parse_judge_score, score_text
 
@@ -321,11 +323,11 @@ def test_parse_state_drops_damaged_cost_totals():
     assert "provider_cost_usd" not in parsed and "costed_request_attempts" not in parsed
 
 
-@pytest.mark.parametrize(("costed_delta", "exported"), [(0, True), (-1, False)])
-def test_completed_records_export_cost_only_when_every_attempt_was_priced(
-    tmp_path, costed_delta, exported
+@pytest.mark.parametrize(("costed_delta", "exact"), [(0, True), (-1, False)])
+def test_completed_records_export_exact_cost_only_when_every_attempt_was_priced(
+    tmp_path, costed_delta, exact
 ):
-    """Export a run cost only when priced attempts match paid attempts exactly."""
+    """Export the reported total when complete, and a flagged estimate otherwise."""
     config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
     state = new_state(config, "b" * 32)
     list(run_research("secret", config, state, lambda _v: None, request=_priced_request(0.5)))
@@ -336,7 +338,69 @@ def test_completed_records_export_cost_only_when_every_attempt_was_priced(
     records = completed_records(tmp_path)
 
     assert records
-    if exported:
+    if exact:
         assert all(r["_run_cost_usd"] == pytest.approx(state["provider_cost_usd"]) for r in records)
+        assert all("_run_cost_estimated" not in r for r in records)
     else:
-        assert all("_run_cost_usd" not in r for r in records)
+        # The incomplete reported total is replaced by an estimate from saved text.
+        assert all(r["_run_cost_usd"] == pytest.approx(estimate_run_cost(state)) for r in records)
+        assert all(r["_run_cost_estimated"] is True for r in records)
+
+
+def test_estimate_rebuilds_conversation_input_and_prices_with_catalog():
+    """Charge each turn for its instruction, earlier history, prompt, and reply."""
+    model = "openai/gpt-5.6-luna"
+    spec = MODELS_BY_ID[model]
+    # Two turns of one conversation: the second re-sends the first exchange.
+    units = [
+        {
+            "kind": "generation",
+            "model": model,
+            "session_id": "s",
+            "variant": "bare",
+            "depth": depth,
+            "prompt": "p" * 40,
+            "response": "r" * 80,
+        }
+        for depth in (2, 1)
+    ]
+    instruction = len(VARIANTS["bare"])
+    input_chars = (instruction + 40) + (instruction + 120 + 40)
+    expected = (
+        input_chars / CHARS_PER_TOKEN * spec.input_usd_per_token
+        + 160 / CHARS_PER_TOKEN * spec.output_usd_per_token
+    )
+
+    assert estimate_run_cost({"units": units}) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "units",
+    [
+        [],
+        [
+            {
+                "kind": "generation",
+                "model": "retired/model",
+                "session_id": "s",
+                "variant": "bare",
+                "depth": 1,
+                "prompt": "p",
+                "response": "r",
+            }
+        ],
+        [
+            {
+                "kind": "generation",
+                "model": "openai/gpt-5.6-luna",
+                "session_id": "s",
+                "variant": "bare",
+                "depth": 1,
+                "prompt": "p",
+            }
+        ],
+    ],
+)
+def test_estimate_is_unavailable_without_priced_complete_units(units):
+    """Return no estimate for empty runs, uncatalogued models, or damaged units."""
+    assert estimate_run_cost({"units": units}) is None

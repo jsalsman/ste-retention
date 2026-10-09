@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from ste.costs import estimate_run_cost
 from ste.models.openrouter import MAX_CONTINUATIONS
 from ste.protocol import PROTOCOL_VERSION, SCHEMA_VERSION, SCORING_VERSION, VARIANTS
 from ste.runs.backend import (
@@ -369,7 +370,8 @@ def completed_records(directory: Path) -> list[dict]:
 
     The cost value is the sum of OpenRouter's reported charges. It is exported only
     when every paid request attempt has a reported charge; runs from before cost
-    tracking, or with an unpriced attempt, export no cost rather than an undercount.
+    tracking, or with an unpriced attempt, instead export an estimate from their saved
+    request text, flagged with ``_run_cost_estimated`` so it is never shown as exact.
     """
     if not directory.is_dir():
         return []
@@ -401,6 +403,10 @@ def completed_records(directory: Path) -> list[dict]:
             ):
                 elapsed_seconds = None
             run_cost = _complete_run_cost(state)
+            # Fall back to a labelled estimate when no exact reported total exists.
+            cost_estimated = run_cost is None
+            if cost_estimated:
+                run_cost = estimate_run_cost(state)
             for record in state["records"]:
                 # Copy records so display-only metadata never mutates persisted state.
                 exported = {**record}
@@ -410,5 +416,7 @@ def completed_records(directory: Path) -> list[dict]:
                     # Every record carries its parent run's total; the leaderboard
                     # deduplicates by run so repeated records never inflate it.
                     exported["_run_cost_usd"] = run_cost
+                    if cost_estimated:
+                        exported["_run_cost_estimated"] = True
                 records.append(exported)
     return records

@@ -16,6 +16,7 @@ from ste.models.openrouter import DEFAULT_MAX_TOKENS, MAX_CONTINUATIONS, chat_te
 from ste.protocol import (
     ALLOWED_MODELS,
     DEFAULT_RESEARCH_DEPTHS,
+    JUDGE_PROMPT_PREFIX,
     PROTOCOL_VERSION,
     PROMPT_POOL,
     SCHEMA_VERSION,
@@ -324,10 +325,7 @@ def run_research(
                             f"{state['run_id']}:{session_id}:{variant}:{depth}:judge".encode()
                         ).hexdigest()
                         if judge_id not in completed:
-                            judge_prompt = (
-                                'Return only JSON as {"score": number from 0 through 100}. '
-                                "Score STE compliance.\n" + reply
-                            )
+                            judge_prompt = JUDGE_PROMPT_PREFIX + reply
                             raw = request(
                                 api_key,
                                 config.judge_model,

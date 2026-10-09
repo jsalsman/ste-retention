@@ -285,3 +285,21 @@ def test_total_cost_keeps_precision_for_very_cheap_rows():
         records.append(record)
 
     assert "<td>$0.0042</td></tr>" in render_leaderboard(records)
+
+
+def test_rows_with_any_estimated_run_cost_are_labelled():
+    """Mark a row's total as estimated when any contributing run cost is an estimate."""
+    records = []
+    for run_id, cost, estimated in (("exact", 1.0, False), ("guess", 0.5, True)):
+        for variant in ("bare", "rules", "named", "named_rules"):
+            record = _arm(run_id, variant, 50)
+            record["_run_cost_usd"] = cost
+            if estimated:
+                # completed_records sets this flag on runs priced from saved text.
+                record["_run_cost_estimated"] = True
+            records.append(record)
+
+    rendered = render_leaderboard(records)
+
+    assert "<td>$1.50 (estimated)</td></tr>" in rendered
+    assert "marked (estimated)" in rendered
