@@ -694,3 +694,38 @@ def test_free_models_are_accepted_for_interaction(client, module, monkeypatch, f
     # Free identifiers pass the allow-list and reach the provider exactly as listed.
     assert response.status_code == 200
     assert sent == [free_model]
+
+
+def test_research_stop_reason_is_streamed_saved_and_reported(client, module, monkeypatch):
+    """Show, save, and report a safe stop reason instead of a bare 'stopped safely'."""
+    from ste.models.openrouter import UpstreamError
+
+    def failing_research(_key, _config, _state, _persist):
+        """Fail the way OpenRouter does when a key reaches its spending limit."""
+        raise UpstreamError(
+            "OpenRouter could not complete the request.",
+            "OpenRouter returned HTTP 403: the API key reached its own spending limit.",
+        )
+        yield  # pragma: no cover - makes this function a generator
+
+    monkeypatch.setattr(module, "run_research", failing_research)
+    response = client.post(
+        "/api/experiments/stream",
+        json={
+            "api_key": "sample-secret",
+            "run_mode": "research",
+            "model": "openai/gpt-5.6-luna",
+            "sessions": 1,
+        },
+    )
+    events = [json.loads(line) for line in response.text.splitlines()]
+    run_id = events[0]["run_id"]
+
+    # The stream names the cause, and the snapshot keeps it for later status checks.
+    assert events[-1]["type"] == "error"
+    assert "HTTP 403" in events[-1]["message"]
+    saved = json.loads((module.EXPERIMENTS / f"{run_id}.json").read_text())
+    assert saved["status"] == "interrupted" and "HTTP 403" in saved["stop_reason"]
+    status = client.get(f"/api/experiments/{run_id}/status").json
+    assert status["liveness"] == "stalled" and "HTTP 403" in status["stop_reason"]
+    assert "sample-secret" not in response.text

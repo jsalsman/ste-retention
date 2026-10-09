@@ -486,7 +486,10 @@
       // Discard a late response if the handle changed or a run started during the lookup.
       if (generation !== runStatusGeneration) return;
       // Only fixed server status and numeric counts are rendered, always through textContent.
-      status.textContent = `Run is ${data.liveness}; ${data.completed} of ${data.total} work units are durable.`;
+      const summary = `Run is ${data.liveness}; ${data.completed} of ${data.total} work units are durable.`;
+      // A stalled run shows why it last stopped; the server saves only safe fixed text.
+      const stopped = data.liveness === "stalled" && typeof data.stop_reason === "string";
+      status.textContent = stopped ? `${summary} Last stop: ${data.stop_reason}` : summary;
     } catch (_error) {
       // Report failure only while no handle change or new run has superseded this lookup.
       if (generation !== runStatusGeneration) return;

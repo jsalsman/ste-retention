@@ -42,7 +42,78 @@ def _reported_cost(payload: Any) -> float | None:
 
 
 class UpstreamError(RuntimeError):
-    """Represent a sanitized inference failure safe to expose to a caller."""
+    """Represent a sanitized inference failure safe to expose to a caller.
+
+    ``reason`` is a short explanation built only from fixed text and, for HTTP
+    failures, the numeric status code. It never contains provider response
+    bodies, headers, or credentials, so it is safe to save and display.
+    """
+
+    def __init__(self, message: str, reason: str | None = None) -> None:
+        """Create the error with its public message and a safe stop reason."""
+        super().__init__(message)
+        # Callers that give no specific reason fall back to the public message.
+        self.reason = reason or message
+
+
+# Plain-language meanings for the HTTP statuses OpenRouter documents. Only the
+# status number comes from the response, so these reasons cannot leak its body.
+HTTP_STATUS_REASONS = {
+    400: "the request was rejected as invalid",
+    401: "the API key was rejected",
+    402: "the account or key is out of credit or has reached its spending limit",
+    403: "the API key reached its own spending limit, or moderation refused the request",
+    404: "the model is not available",
+    408: "the request timed out",
+    413: "the request was too large",
+    429: "requests are being rate limited",
+    500: "OpenRouter had an internal error",
+    502: "the model provider returned an error",
+    503: "no model provider is currently available",
+}
+
+# Reasons for replies that arrived but cannot be used, keyed by finish status.
+FINISH_REASONS = {
+    "length": "The model's reply was still unfinished after every allowed continuation.",
+    "max_tokens": "The model's reply was still unfinished after every allowed continuation.",
+    "content_filter": "The provider filtered the model's reply.",
+    "tool_calls": "The model asked to call a tool instead of replying.",
+}
+
+# Our own validation messages map to readable reasons; nothing else is echoed.
+VALIDATION_REASONS = {
+    "missing response text": "OpenRouter returned an empty reply.",
+    "missing finish reason": "OpenRouter returned a reply without a finish status.",
+    "unknown finish reason": "OpenRouter returned a reply with an unknown finish status.",
+}
+
+
+def _failure_reason(exc: BaseException) -> str:
+    """Describe a transport or validation failure using only safe, fixed text.
+
+    Args:
+        exc: The exception caught while sending the request or reading its reply.
+
+    Returns:
+        One sentence suitable for saving with a run and showing in the browser.
+
+    """
+    if isinstance(exc, requests.Timeout):
+        return "OpenRouter did not respond within the time limit."
+    if isinstance(exc, requests.ConnectionError):
+        return "The app could not connect to OpenRouter."
+    if isinstance(exc, requests.HTTPError):
+        # Only the integer status is read; the response body is never touched.
+        status = getattr(exc.response, "status_code", None)
+        if isinstance(status, int):
+            meaning = HTTP_STATUS_REASONS.get(status)
+            return f"OpenRouter returned HTTP {status}" + (f": {meaning}." if meaning else ".")
+        return "OpenRouter returned an HTTP error."
+    if isinstance(exc, requests.RequestException):
+        return "The request to OpenRouter failed."
+    # Exception text is used only when it is one of this module's own fixed messages.
+    fallback = "OpenRouter returned a response in an unexpected format."
+    return VALIDATION_REASONS.get(str(exc), fallback)
 
 
 @dataclass(frozen=True)
@@ -60,7 +131,10 @@ class IncompleteGenerationError(UpstreamError):
     def __init__(self, content: str, finish_reason: str = "length") -> None:
         """Create a sanitized truncation result containing only model-generated text."""
         # Do not retain the response, its headers, or any credential-bearing exception.
-        super().__init__("OpenRouter reported that the response was truncated.")
+        super().__init__(
+            "OpenRouter reported that the response was truncated.",
+            FINISH_REASONS.get(finish_reason, "The model's reply did not finish."),
+        )
         # Both fields have passed validation and are safe for the public response.
         self.content = content
         self.finish_reason = finish_reason
@@ -120,7 +194,10 @@ def chat(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 # Partial text is diagnostic output, not completed experimental work.
-                raise IncompleteGenerationError("".join(content_parts), last_reason)
+                incomplete = IncompleteGenerationError("".join(content_parts), last_reason)
+                # Running out of time is a different cause from a reply that never ends.
+                incomplete.reason = "The model's reply did not finish within the time limit."
+                raise incomplete
             if on_attempt is not None:
                 # Account durably before sending so crashes cannot hide paid work.
                 on_attempt()
@@ -180,7 +257,9 @@ def chat(
         raise
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
         # Deliberately discard response bodies, headers, and exception strings.
-        raise UpstreamError("OpenRouter could not complete the request.") from exc
+        raise UpstreamError(
+            "OpenRouter could not complete the request.", _failure_reason(exc)
+        ) from exc
 
 
 def chat_text(

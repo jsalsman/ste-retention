@@ -18,9 +18,17 @@ from ste.models.openrouter import (
     chat,
 )
 from ste.records import RecordError
-from ste.research import ResearchConfig, load_state, new_state, parse_state, run_research
+from ste.research import (
+    PaidRequestCeilingError,
+    ResearchConfig,
+    load_state,
+    new_state,
+    parse_state,
+    run_research,
+)
 from ste.runs.backend import LeaseUnavailableError, is_not_found
 from ste.runs.lease import RunActiveError, acquire_lease, lease_duration
+from ste.runs.stop import CLOSED_REASON, describe_stop
 from ste.runs.store import (
     RUN_ID,
     RunStoreError,
@@ -37,6 +45,31 @@ RECORDS = ROOT / "ste_retention_run" / "records.jsonl"
 EXPERIMENTS = Path(os.environ.get("EXPERIMENTS_DIR", "/experiments"))
 app = Flask(__name__, static_folder=str(ROOT / "static"), static_url_path="/static")
 app.config.update(MAX_CONTENT_LENGTH=16 * 1024, JSON_SORT_KEYS=False)
+
+
+def _mark_stopped(state: dict, reason: str, cause: str) -> None:
+    """Mark a run interrupted, save why it stopped, and log the reason.
+
+    Args:
+        state: The run snapshot to update before its cleanup write.
+        reason: A display-safe reason from :func:`describe_stop` or a fixed constant.
+        cause: The exception class name, or a fixed label, for the service log.
+
+    """
+    state["status"] = "interrupted"
+    state["lease_expires_at"] = None
+    # The reason is fixed text plus status numbers, so it is safe to persist and show.
+    state["stop_reason"] = reason
+    state["stopped_at"] = datetime.now(timezone.utc).isoformat()
+    # Logs carry only the run ID, cause class, and safe reason, never the API key.
+    app.logger.warning("Run %s stopped (%s): %s", state.get("run_id"), cause, reason)
+
+
+def _clear_stop(state: dict) -> None:
+    """Remove a previous stop reason when a run starts or resumes."""
+    # A running or completed run must not show the reason for an earlier stop.
+    state.pop("stop_reason", None)
+    state.pop("stopped_at", None)
 
 
 def _payload() -> dict:
@@ -185,6 +218,7 @@ def experiment_stream():
         state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
         state["lease_expires_at"] = lease.expires_at.isoformat()
         state["status"] = "running"
+        _clear_stop(state)
         snapshots.write(state)
     except RunActiveError as exc:
         if lease is not None:
@@ -215,7 +249,7 @@ def experiment_stream():
         paid_attempts = state.get("paid_request_attempts", 0)
         if type(paid_attempts) is not int or paid_attempts >= maximum:
             # Repeated resumes cannot spend beyond the workload disclosed at creation.
-            raise RuntimeError("The paid-provider request ceiling was reached.")
+            raise PaidRequestCeilingError()
         expires = lease.heartbeat()
         state["paid_request_attempts"] = paid_attempts + 1
         state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
@@ -258,10 +292,11 @@ def experiment_stream():
             if not terminal:
                 # A normally exhausted generator without a terminal event is premature.
                 raise RuntimeError("Experiment generator ended prematurely.")
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             if not terminal:
-                state["status"] = "interrupted"
-                state["lease_expires_at"] = None
+                reason = describe_stop(exc)
+                # Save and log why the preview stopped before the cleanup write.
+                _mark_stopped(state, reason, type(exc).__name__)
                 try:
                     # Prove current lease ownership before any exception cleanup write.
                     lease.heartbeat()
@@ -274,7 +309,7 @@ def experiment_stream():
                     json.dumps(
                         {
                             "type": "error",
-                            "message": "The experiment stopped safely.",
+                            "message": f"The experiment stopped safely: {reason}",
                             "completed": completed,
                             "total": batches * turns * 4,
                             "elapsed_seconds": elapsed,
@@ -286,8 +321,7 @@ def experiment_stream():
         finally:
             if not terminal and state.get("status") != "interrupted":
                 # Client cancellation closes the generator without an exception we can stream.
-                state["status"] = "interrupted"
-                state["lease_expires_at"] = None
+                _mark_stopped(state, CLOSED_REASON, "closed")
                 try:
                     # Cancellation cleanup must also prove the lease was not taken over.
                     lease.heartbeat()
@@ -350,6 +384,7 @@ def _research_stream(data: dict, api_key: str) -> Response:
         raise ValueError("The experiment run identifier is invalid.")
 
     state["status"] = "running"
+    _clear_stop(state)
     state["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
     state["lease_expires_at"] = lease.expires_at.isoformat()
     # Persist running metadata before response headers expose the stream to a client.
@@ -432,11 +467,11 @@ def _research_stream(data: dict, api_key: str) -> Response:
                         event["eta_seconds"] = round(elapsed / measured * (total - completed), 1)
                 # NDJSON framing keeps each progress update independently parseable.
                 yield json.dumps(event, ensure_ascii=False) + "\n"
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             if not terminal:
-                # Preserve completed paid work while making this snapshot resumable.
-                state["status"] = "interrupted"
-                state["lease_expires_at"] = None
+                reason = describe_stop(exc)
+                # Preserve completed paid work and record why the study stopped.
+                _mark_stopped(state, reason, type(exc).__name__)
                 try:
                     # Prove current lease ownership before any exception cleanup write.
                     lease.heartbeat()
@@ -450,7 +485,7 @@ def _research_stream(data: dict, api_key: str) -> Response:
                     json.dumps(
                         {
                             "type": "error",
-                            "message": "The research study stopped safely.",
+                            "message": f"The research study stopped safely: {reason}",
                             "completed": completed,
                             "total": total,
                             "elapsed_seconds": round(
@@ -464,8 +499,8 @@ def _research_stream(data: dict, api_key: str) -> Response:
         finally:
             # Generator close on browser cancellation skips the normal exception path.
             if not terminal and state.get("status") != "interrupted":
-                state["status"] = "interrupted"
-                state["lease_expires_at"] = None
+                # No exception reached this request, so record a closed connection.
+                _mark_stopped(state, CLOSED_REASON, "closed")
                 try:
                     # Cancellation cleanup must also prove the lease was not taken over.
                     lease.heartbeat()
@@ -538,6 +573,8 @@ def experiment_status(run_id: str):
             heartbeat_at=state.get("heartbeat_at"),
             lease_expires_at=expiry_text,
             updated_at=state.get("updated_at"),
+            # Saved stop reasons are fixed text, so the status check can show them.
+            stop_reason=state.get("stop_reason"),
         )
     except (OSError, json.JSONDecodeError, RunStoreError, TypeError, ValueError) as exc:
         return jsonify(error=str(exc)), 404
