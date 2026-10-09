@@ -80,12 +80,35 @@ FINISH_REASONS = {
     "tool_calls": "The model asked to call a tool instead of replying.",
 }
 
+# OpenRouter's 403 body says "Key limit exceeded" when a key reaches its own total
+# spending limit. The body is only matched against this phrase, never echoed, and
+# the fixed reason below tells the user exactly what to change.
+KEY_LIMIT_PHRASE = "key limit exceeded"
+KEY_LIMIT_REASON = (
+    "OpenRouter returned HTTP 403: the API key reached its own spending limit. "
+    "Raise the key's limit on OpenRouter's Keys page, then resume the run."
+)
+
 # Our own validation messages map to readable reasons; nothing else is echoed.
 VALIDATION_REASONS = {
     "missing response text": "OpenRouter returned an empty reply.",
     "missing finish reason": "OpenRouter returned a reply without a finish status.",
     "unknown finish reason": "OpenRouter returned a reply with an unknown finish status.",
 }
+
+
+def _mentions_key_limit(response: Any) -> bool:
+    """Return whether an error body contains OpenRouter's key-limit phrase.
+
+    Only a case-insensitive substring check is made, so no body text can reach
+    the stop reason. Unreadable bodies count as not mentioning the limit.
+    """
+    try:
+        # A short prefix suffices for OpenRouter's compact JSON error object.
+        text = response.text[:2000]
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(text, str) and KEY_LIMIT_PHRASE in text.lower()
 
 
 def _failure_reason(exc: BaseException) -> str:
@@ -105,6 +128,9 @@ def _failure_reason(exc: BaseException) -> str:
     if isinstance(exc, requests.HTTPError):
         # Only the integer status is read; the response body is never touched.
         status = getattr(exc.response, "status_code", None)
+        if status == 403 and _mentions_key_limit(exc.response):
+            # A recognized phrase selects fixed text; the body itself is discarded.
+            return KEY_LIMIT_REASON
         if isinstance(status, int):
             meaning = HTTP_STATUS_REASONS.get(status)
             return f"OpenRouter returned HTTP {status}" + (f": {meaning}." if meaning else ".")

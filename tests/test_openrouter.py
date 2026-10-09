@@ -238,3 +238,21 @@ def test_empty_and_filtered_replies_have_specific_reasons(monkeypatch):
     with pytest.raises(openrouter.IncompleteGenerationError) as caught:
         openrouter.chat("secret", "model", [])
     assert caught.value.reason == "The provider filtered the model's reply."
+
+
+def test_key_limit_403_names_the_limit_and_the_fix(monkeypatch):
+    """Recognize OpenRouter's key-limit reply and say how to fix it, without echoing it."""
+    failure = requests.Response()
+    failure.status_code = 403
+    # This is OpenRouter's real reply when a key reaches its total spending limit.
+    failure._content = b'{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/abc","code":403}}'
+    response = Mock()
+    response.raise_for_status.side_effect = requests.HTTPError(response=failure)
+    monkeypatch.setattr(openrouter.requests, "post", Mock(return_value=response))
+
+    with pytest.raises(openrouter.UpstreamError) as caught:
+        openrouter.chat("secret", "model", [])
+
+    # The reason is the fixed text, and the provider's URL never appears in it.
+    assert caught.value.reason == openrouter.KEY_LIMIT_REASON
+    assert "workspaces" not in caught.value.reason
