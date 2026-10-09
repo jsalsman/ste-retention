@@ -88,6 +88,9 @@ def estimate_run_cost(state: dict) -> float | None:
         # Generations group into conversations; judges are priced on their own.
         if unit.get("kind") == "generation":
             key = (unit.get("session_id"), unit.get("variant"))
+            if not all(isinstance(part, str) for part in key):
+                # Conversations are keyed by these strings; other values are damage.
+                return None
             conversations.setdefault(key, []).append(unit)
         elif unit.get("kind") == "judge":
             judges.append(unit)

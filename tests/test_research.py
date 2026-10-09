@@ -451,6 +451,52 @@ def test_estimate_is_unavailable_for_malformed_depths():
     assert estimate_run_cost({"units": units}) is None
 
 
+def test_estimate_is_unavailable_for_non_string_conversation_keys():
+    """Return no estimate when a unit's session or variant is not a string."""
+    unit = {
+        "kind": "generation",
+        "model": "openai/gpt-5.6-luna",
+        "session_id": ["s"],
+        "variant": "bare",
+        "depth": 1,
+        "prompt": "p",
+        "response": "r",
+    }
+    assert estimate_run_cost({"units": [unit]}) is None
+
+
+def test_completed_records_survive_estimator_failures(tmp_path, monkeypatch):
+    """Keep publishing a run, without a cost, when estimating it raises."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "d" * 32)
+    list(run_research("secret", config, state, lambda _v: None, request=_priced_request(None)))
+    save_state(tmp_path / "run.json", state)
+
+    def broken(_state):
+        """Fail the way an unforeseen damaged unit could."""
+        raise TypeError("unhashable")
+
+    monkeypatch.setattr("ste.runs.store.estimate_run_cost", broken)
+    records = completed_records(tmp_path)
+
+    # The run's scores still publish; only its cost is missing.
+    assert records and all("_run_cost_usd" not in r for r in records)
+
+
+def test_negative_matching_counters_are_not_an_exact_cost(tmp_path):
+    """Never treat impossible negative accounting as an exact reported total."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "e" * 32)
+    list(run_research("secret", config, state, lambda _v: None, request=_priced_request(0.5)))
+    state["paid_request_attempts"] = state["costed_request_attempts"] = -1
+    save_state(tmp_path / "run.json", state)
+
+    records = completed_records(tmp_path)
+
+    # Without a trustworthy total, the run falls back to a labelled estimate.
+    assert records and all(r.get("_run_cost_estimated") is True for r in records)
+
+
 def test_estimate_is_unavailable_for_unknown_unit_kinds():
     """Refuse an estimate rather than silently skipping a request it cannot price."""
     assert estimate_run_cost({"units": [{"kind": "mystery"}]}) is None

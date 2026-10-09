@@ -353,7 +353,7 @@ def _complete_run_cost(state: dict) -> float | None:
     costed = state.get("costed_request_attempts")
     paid = state.get("paid_request_attempts")
     # Integer counters must agree exactly; a gap means at least one unknown charge.
-    if type(costed) is not int or type(paid) is not int or costed != paid:
+    if type(costed) is not int or type(paid) is not int or costed != paid or paid < 0:
         return None
     if isinstance(cost, bool) or not isinstance(cost, (int, float)):
         return None
@@ -406,7 +406,12 @@ def completed_records(directory: Path) -> list[dict]:
             # Fall back to a labelled estimate when no exact reported total exists.
             cost_estimated = run_cost is None
             if cost_estimated:
-                run_cost = estimate_run_cost(state)
+                try:
+                    run_cost = estimate_run_cost(state)
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    # Saved units are not schema-validated, so damaged ones must
+                    # only make this run's cost unavailable, never the leaderboard.
+                    run_cost = None
             for record in state["records"]:
                 # Copy records so display-only metadata never mutates persisted state.
                 exported = {**record}
