@@ -26,6 +26,8 @@ from ste.research import (
     run_research,
     save_state,
 )
+from ste.costs import CHARS_PER_TOKEN, estimate_run_cost
+from ste.models.catalog import MODELS_BY_ID
 from ste.runs.store import completed_records
 from ste.scoring import parse_judge_score, score_text
 
@@ -266,3 +268,235 @@ def test_resume_rejects_changed_configuration_and_duplicate_units(tmp_path):
     changed = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=4)
     with pytest.raises(ValueError):
         load_state(path, changed, "b" * 32)
+
+
+def _priced_request(cost):
+    """Build a mocked provider call that reports ``cost`` for every attempt."""
+
+    def request(_key, _model, _messages, *, on_attempt, on_cost, **_options):
+        """Reserve the attempt, report its charge, and return a complete reply."""
+        # Accounting mirrors the real adapter: reserve first, then report the charge.
+        on_attempt()
+        if cost is not None:
+            on_cost(cost)
+        return "Short reply."
+
+    return request
+
+
+def test_research_totals_reported_costs_for_every_paid_attempt():
+    """Sum each priced attempt and keep the priced count equal to paid attempts."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "e" * 32)
+
+    list(run_research("secret", config, state, lambda _v: None, request=_priced_request(0.25)))
+
+    # Every paid attempt was priced, so the total is complete.
+    attempts = state["paid_request_attempts"]
+    assert state["costed_request_attempts"] == attempts > 0
+    assert state["provider_cost_usd"] == pytest.approx(0.25 * attempts)
+
+
+def test_legacy_research_state_never_gains_a_partial_cost_total():
+    """Leave pre-tracking snapshots without totals so earlier charges stay unknown."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "f" * 32)
+    # Model a snapshot written before cost tracking existed.
+    del state["provider_cost_usd"], state["costed_request_attempts"]
+    resumed = parse_state(json.dumps(state), config, "f" * 32)
+
+    list(run_research("secret", config, resumed, lambda _v: None, request=_priced_request(0.25)))
+
+    assert "provider_cost_usd" not in resumed
+    assert "costed_request_attempts" not in resumed
+
+
+def test_parse_state_drops_damaged_cost_totals():
+    """Resume a snapshot with impossible cost data but stop claiming a total."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "a" * 32)
+    # More priced attempts than paid attempts cannot be a real history.
+    state["costed_request_attempts"] = 3
+
+    parsed = parse_state(json.dumps(state), config, "a" * 32)
+
+    assert "provider_cost_usd" not in parsed and "costed_request_attempts" not in parsed
+
+
+@pytest.mark.parametrize(("costed_delta", "exact"), [(0, True), (-1, False)])
+def test_completed_records_export_exact_cost_only_when_every_attempt_was_priced(
+    tmp_path, costed_delta, exact
+):
+    """Export the reported total when complete, and a flagged estimate otherwise."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "b" * 32)
+    list(run_research("secret", config, state, lambda _v: None, request=_priced_request(0.5)))
+    # A shortfall models one attempt whose charge OpenRouter never reported.
+    state["costed_request_attempts"] += costed_delta
+    save_state(tmp_path / "run.json", state)
+
+    records = completed_records(tmp_path)
+
+    assert records
+    if exact:
+        assert all(r["_run_cost_usd"] == pytest.approx(state["provider_cost_usd"]) for r in records)
+        assert all("_run_cost_estimated" not in r for r in records)
+    else:
+        # The incomplete reported total is replaced by an estimate from saved text.
+        assert all(r["_run_cost_usd"] == pytest.approx(estimate_run_cost(state)) for r in records)
+        assert all(r["_run_cost_estimated"] is True for r in records)
+
+
+def test_estimate_rebuilds_conversation_input_and_prices_with_catalog():
+    """Charge each turn for its instruction, earlier history, prompt, and reply."""
+    model = "openai/gpt-5.6-luna"
+    spec = MODELS_BY_ID[model]
+    # Two turns of one conversation: the second re-sends the first exchange.
+    units = [
+        {
+            "kind": "generation",
+            "model": model,
+            "session_id": "s",
+            "variant": "bare",
+            "depth": depth,
+            "prompt": "p" * 40,
+            "response": "r" * 80,
+        }
+        for depth in (2, 1)
+    ]
+    instruction = len(VARIANTS["bare"])
+    input_chars = (instruction + 40) + (instruction + 120 + 40)
+    expected = (
+        input_chars / CHARS_PER_TOKEN * spec.input_usd_per_token
+        + 160 / CHARS_PER_TOKEN * spec.output_usd_per_token
+    )
+
+    assert estimate_run_cost({"units": units}) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "units",
+    [
+        [],
+        [
+            {
+                "kind": "generation",
+                "model": "retired/model",
+                "session_id": "s",
+                "variant": "bare",
+                "depth": 1,
+                "prompt": "p",
+                "response": "r",
+            }
+        ],
+        [
+            {
+                "kind": "generation",
+                "model": "openai/gpt-5.6-luna",
+                "session_id": "s",
+                "variant": "bare",
+                "depth": 1,
+                "prompt": "p",
+            }
+        ],
+    ],
+)
+def test_estimate_is_unavailable_without_priced_complete_units(units):
+    """Return no estimate for empty runs, uncatalogued models, or damaged units."""
+    assert estimate_run_cost({"units": units}) is None
+
+
+def test_reported_cost_is_persisted_before_the_reply_is_validated():
+    """Save a reported charge even when the request then fails before its checkpoint."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "c" * 32)
+    snapshots = []
+
+    def request(_key, _model, _messages, *, on_attempt, on_cost, **_options):
+        """Report a charge, then fail as a filtered or malformed reply would."""
+        on_attempt()
+        on_cost(0.4)
+        raise IncompleteGenerationError("", "content_filter")
+
+    with pytest.raises(IncompleteGenerationError):
+        list(
+            run_research(
+                "secret",
+                config,
+                state,
+                lambda value: snapshots.append(json.loads(json.dumps(value))),
+                request=request,
+            )
+        )
+
+    # The last durable snapshot already holds the charge and its priced attempt.
+    assert snapshots[-1]["provider_cost_usd"] == pytest.approx(0.4)
+    assert snapshots[-1]["costed_request_attempts"] == snapshots[-1]["paid_request_attempts"] == 1
+
+
+def test_estimate_is_unavailable_for_malformed_depths():
+    """Return no estimate, rather than crash the leaderboard, for unsortable depths."""
+    units = [
+        {
+            "kind": "generation",
+            "model": "openai/gpt-5.6-luna",
+            "session_id": "s",
+            "variant": "bare",
+            "depth": depth,
+            "prompt": "p",
+            "response": "r",
+        }
+        for depth in (1, "2")
+    ]
+    assert estimate_run_cost({"units": units}) is None
+
+
+def test_estimate_is_unavailable_for_non_string_conversation_keys():
+    """Return no estimate when a unit's session or variant is not a string."""
+    unit = {
+        "kind": "generation",
+        "model": "openai/gpt-5.6-luna",
+        "session_id": ["s"],
+        "variant": "bare",
+        "depth": 1,
+        "prompt": "p",
+        "response": "r",
+    }
+    assert estimate_run_cost({"units": [unit]}) is None
+
+
+def test_completed_records_survive_estimator_failures(tmp_path, monkeypatch):
+    """Keep publishing a run, without a cost, when estimating it raises."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "d" * 32)
+    list(run_research("secret", config, state, lambda _v: None, request=_priced_request(None)))
+    save_state(tmp_path / "run.json", state)
+
+    def broken(_state):
+        """Fail the way an unforeseen damaged unit could."""
+        raise TypeError("unhashable")
+
+    monkeypatch.setattr("ste.runs.store.estimate_run_cost", broken)
+    records = completed_records(tmp_path)
+
+    # The run's scores still publish; only its cost is missing.
+    assert records and all("_run_cost_usd" not in r for r in records)
+
+
+def test_negative_matching_counters_are_not_an_exact_cost(tmp_path):
+    """Never treat impossible negative accounting as an exact reported total."""
+    config = ResearchConfig(("openai/gpt-5.6-luna",), 1, (1,), seed=5)
+    state = new_state(config, "e" * 32)
+    list(run_research("secret", config, state, lambda _v: None, request=_priced_request(0.5)))
+    state["paid_request_attempts"] = state["costed_request_attempts"] = -1
+    save_state(tmp_path / "run.json", state)
+
+    records = completed_records(tmp_path)
+
+    # Without a trustworthy total, the run falls back to a labelled estimate.
+    assert records and all(r.get("_run_cost_estimated") is True for r in records)
+
+
+def test_estimate_is_unavailable_for_unknown_unit_kinds():
+    """Refuse an estimate rather than silently skipping a request it cannot price."""
+    assert estimate_run_cost({"units": [{"kind": "mystery"}]}) is None

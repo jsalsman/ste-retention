@@ -85,6 +85,12 @@ DEFAULT_MAX_BATCHES = 6
 # It is re-exported from the model catalog, which is the only list of identifiers.
 ALLOWED_MODELS = CATALOG_MODELS
 
+# The judge request is this fixed instruction followed by the reply being scored.
+# Research sends it, and older-run cost estimates use its length, so it lives here.
+JUDGE_PROMPT_PREFIX = (
+    'Return only JSON as {"score": number from 0 through 100}. Score STE compliance.\n'
+)
+
 # Required record fields define the durable analytical contract in one place.
 RECORD_FIELDS = frozenset(
     {

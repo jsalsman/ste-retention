@@ -246,3 +246,60 @@ def test_chart_leads_page_and_escapes_model_names():
 def test_chart_omitted_without_rows():
     """Leave only the table empty state when no complete records exist."""
     assert "leaderboard-chart" not in render_leaderboard([])
+
+
+def test_total_cost_column_sums_runs_once_and_hides_partial_totals():
+    """Add each run's cost once per row, and show Unavailable when any run lacks one."""
+    records = []
+    for run_id, model, cost in (
+        ("one", "priced", 0.5),
+        ("two", "priced", 1.25),
+        ("three", "mixed", 0.75),
+        ("four", "mixed", None),
+    ):
+        for variant in ("bare", "rules", "named", "named_rules"):
+            record = _arm(run_id, variant, 50)
+            record["model"] = model
+            if cost is not None:
+                # Every record repeats its run's total, as completed_records exports it.
+                record["_run_cost_usd"] = cost
+            records.append(record)
+
+    rendered = render_leaderboard(records)
+
+    # The new column is last, and its definition appears in the explanation.
+    assert "<th>Run elapsed</th><th>Total cost</th></tr>" in rendered
+    assert "Total cost is the sum of OpenRouter's reported charges" in rendered
+    priced = rendered[rendered.index('data-model="priced"') :].split("</tr>")[0]
+    mixed = rendered[rendered.index('data-model="mixed"') :].split("</tr>")[0]
+    assert priced.endswith("<td>$1.75</td>")
+    assert mixed.endswith("<td>Unavailable</td>")
+
+
+def test_total_cost_keeps_precision_for_very_cheap_rows():
+    """Show four decimals below one cent so cheap studies do not read as free."""
+    records = []
+    for variant in ("bare", "rules", "named", "named_rules"):
+        record = _arm("cheap", variant, 50)
+        record["_run_cost_usd"] = 0.0042
+        records.append(record)
+
+    assert "<td>$0.0042</td></tr>" in render_leaderboard(records)
+
+
+def test_rows_with_any_estimated_run_cost_are_labelled():
+    """Mark a row's total as estimated when any contributing run cost is an estimate."""
+    records = []
+    for run_id, cost, estimated in (("exact", 1.0, False), ("guess", 0.5, True)):
+        for variant in ("bare", "rules", "named", "named_rules"):
+            record = _arm(run_id, variant, 50)
+            record["_run_cost_usd"] = cost
+            if estimated:
+                # completed_records sets this flag on runs priced from saved text.
+                record["_run_cost_estimated"] = True
+            records.append(record)
+
+    rendered = render_leaderboard(records)
+
+    assert "<td>$1.50 (estimated)</td></tr>" in rendered
+    assert "marked (estimated)" in rendered

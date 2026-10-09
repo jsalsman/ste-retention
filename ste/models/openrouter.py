@@ -1,5 +1,6 @@
 """Credential-safe OpenRouter HTTP communication with complete-output retries."""
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,6 +23,22 @@ MAX_CONTINUATIONS = 3
 # The suffix instruction is deliberately stable so retries can be tested and so
 # the model does not mistake a continuation for a new experiment prompt.
 CONTINUATION_PROMPT = "Continue exactly where the preceding response stopped. Do not repeat it."
+
+
+def _reported_cost(payload: Any) -> float | None:
+    """Return OpenRouter's reported US-dollar charge for one response, if usable.
+
+    OpenRouter includes ``usage.cost`` when usage accounting is requested. A
+    missing, boolean, negative, or non-finite value yields ``None`` so callers
+    treat the request's charge as unknown rather than as free.
+    """
+    # Only a mapping can carry usage metadata; anything else has no usable cost.
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    cost = usage.get("cost") if isinstance(usage, dict) else None
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return None
+    # Reject impossible charges so they can never reach a displayed total.
+    return float(cost) if math.isfinite(cost) and cost >= 0 else None
 
 
 class UpstreamError(RuntimeError):
@@ -57,6 +74,7 @@ def chat(
     timeout: float = 45,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     on_attempt: Callable[[], None] | None = None,
+    on_cost: Callable[[float], None] | None = None,
 ) -> ChatCompletion:
     """Return one validated response that the provider explicitly finished.
 
@@ -73,6 +91,9 @@ def chat(
         max_tokens: Output-token allowance for each provider attempt.
         on_attempt: Optional durable accounting callback invoked immediately before
             each provider request. If it raises, that request is not sent.
+        on_cost: Optional callback that receives each response's provider-reported
+            US-dollar charge. It is not called when a response reports no usable
+            cost, so callers can tell priced requests from unpriced ones.
 
     Returns:
         A completion whose finish reason is ``stop`` and whose content combines
@@ -109,12 +130,23 @@ def chat(
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={"model": model, "messages": request_messages, "max_tokens": max_tokens},
+                json={
+                    "model": model,
+                    "messages": request_messages,
+                    "max_tokens": max_tokens,
+                    # Ask OpenRouter to report each response's charge for cost totals.
+                    "usage": {"include": True},
+                },
                 timeout=remaining,
             )
             response.raise_for_status()
+            payload: Any = response.json()
+            cost = _reported_cost(payload)
+            if on_cost is not None and cost is not None:
+                # Report the charge before content checks; malformed replies still cost.
+                on_cost(cost)
             # Validate the selected choice rather than returning arbitrary provider JSON.
-            choice: Any = response.json()["choices"][0]
+            choice: Any = payload["choices"][0]
             content: Any = choice["message"]["content"]
             finish_reason: Any = choice["finish_reason"]
             if not isinstance(content, str) or not content.strip():

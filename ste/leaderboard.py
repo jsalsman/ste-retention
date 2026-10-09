@@ -105,6 +105,24 @@ def _elapsed_cell(run_seconds: dict[object, float], expected_runs: set[object]) 
     return f"{seconds}s"
 
 
+def _cost_cell(
+    run_costs: dict[object, float], estimated_runs: set[object], expected_runs: set[object]
+) -> str:
+    """Format the summed provider cost only when every contributing run has a value.
+
+    A row missing any run's cost would understate spending, so it is shown as
+    unavailable, matching how partial elapsed-time data is treated. A row that
+    includes any estimated run cost is labelled "(estimated)" as a whole.
+    """
+    if not expected_runs.issubset(run_costs):
+        return "Unavailable"
+    total = sum(run_costs[run_id] for run_id in expected_runs)
+    # Cents suffice for most studies; very cheap rows keep four decimals so they
+    # do not all read as $0.00.
+    amount = f"${total:.2f}" if total == 0 or total >= 0.01 else f"${total:.4f}"
+    return f"{amount} (estimated)" if expected_runs & estimated_runs else amount
+
+
 # Chart geometry is in SVG user units; the viewBox scales it to the container width.
 # Each model gets a label line above its dumbbell so long identifiers never need a
 # fixed left gutter, which keeps the figure legible on phone-width screens.
@@ -249,7 +267,16 @@ def _render_explanation() -> tuple[str, str]:
         f"score points.</p><dl>{definitions}</dl>"
         # Interaction signs alone do not establish a causal explanation.
         "<p>A negative interaction may reflect overlap between naming the technique and "
-        "spelling out its rules, but the interaction does not identify its cause.</p></section>"
+        "spelling out its rules, but the interaction does not identify its cause.</p>"
+        # Say what the cost covers and why some rows cannot show one.
+        "<p>Total cost is the sum of OpenRouter's reported charges for every paid request "
+        "in the row's runs, including continuations and judge calls. Runs from before cost "
+        "tracking, or with a request whose charge was not reported, are estimated from their "
+        "saved text at about four characters per token and current catalog prices; a row "
+        "that includes any such run is marked (estimated). Estimates leave out hidden "
+        "reasoning tokens, retries and continuations, so actual spending may be higher. "
+        "Unavailable means a run could not be estimated, for example because its model is "
+        "no longer in the catalog.</p></section>"
     )
     # Explain the sampling unit explicitly so repeated depths are not mistaken for replicates.
     uncertainty = (
@@ -300,7 +327,7 @@ def _render_table(rows: list[str]) -> str:
         "<th>Bare baseline</th><th>Rule effect</th>"
         "<th>Naming effect</th><th>Interaction</th>"
         # Count the independent clustered units rather than the underlying depth cells.
-        "<th>Paired sessions</th><th>Run elapsed</th></tr></thead>"
+        "<th>Paired sessions</th><th>Run elapsed</th><th>Total cost</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
@@ -352,6 +379,10 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
     # Timing belongs to a complete parent run rather than one response record. Values
     # are deduplicated by run below so repeated sessions and depths cannot inflate them.
     elapsed_by_run: dict[object, float] = {}
+    # Provider charges are also per run, so they are deduplicated the same way.
+    cost_by_run: dict[object, float] = {}
+    # Runs whose cost is a text-based estimate rather than OpenRouter's reported charge.
+    estimated_runs: set[object] = set()
     for (model, run_id, session, _depth, protocol, scoring), arms in paired.items():
         counts = {len(values) for values in arms.values()}
         if len(arms) != 4 or len(counts) != 1:
@@ -384,6 +415,16 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
             numeric_elapsed = float(run_elapsed)
             if math.isfinite(numeric_elapsed) and numeric_elapsed >= 0:
                 elapsed_by_run[run_id] = numeric_elapsed
+        # Cost metadata gets the same validation because records may come from JSONL.
+        run_record = next((record for record in records if record.get("run_id") == run_id), {})
+        run_cost = run_record.get("_run_cost_usd")
+        if isinstance(run_cost, (int, float)) and not isinstance(run_cost, bool):
+            numeric_cost = float(run_cost)
+            if math.isfinite(numeric_cost) and numeric_cost >= 0:
+                cost_by_run[run_id] = numeric_cost
+                # Only an explicit True marks an estimate; anything else is exact.
+                if run_record.get("_run_cost_estimated") is True:
+                    estimated_runs.add(run_id)
     # Average each cluster into one observation before estimating sampling uncertainty.
     grouped: dict[tuple[str, object, object], list[tuple[float, float, float, float, float]]] = {}
     grouped_runs: dict[tuple[str, object, object], set[object]] = {}
@@ -428,7 +469,8 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
             f"<td>{cells[0]}</td><td>{cells[1]}</td><td>{cells[2]}</td>"
             f"<td>{cells[3]}</td><td>{cells[4]}</td>"
             f"<td>{len(contrasts)}</td>"
-            f"<td>{_elapsed_cell(elapsed_by_run, grouped_runs[group_key])}</td></tr>"
+            f"<td>{_elapsed_cell(elapsed_by_run, grouped_runs[group_key])}</td>"
+            f"<td>{_cost_cell(cost_by_run, estimated_runs, grouped_runs[group_key])}</td></tr>"
         )
     label = "Synthetic preview — not experimental data" if synthetic else "Experiment results"
     # Keep the primary leaderboard above the supporting uncertainty detail so visitors

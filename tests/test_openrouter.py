@@ -142,3 +142,45 @@ def test_chat_text_unwraps_only_complete_generations(monkeypatch):
     )
     with pytest.raises(openrouter.IncompleteGenerationError):
         openrouter.chat_text("secret", "model", [])
+
+
+def test_chat_reports_each_provider_cost_and_requests_usage(monkeypatch):
+    """Report every attempt's reported charge and ask OpenRouter to include it."""
+    partial = _response(
+        {
+            "choices": [{"message": {"content": "Part"}, "finish_reason": "length"}],
+            "usage": {"cost": 0.002},
+        }
+    )
+    complete = _response(
+        {
+            "choices": [{"message": {"content": " end."}, "finish_reason": "stop"}],
+            "usage": {"cost": 0.003},
+        }
+    )
+    # Two local responses model one continuation; no paid request is made.
+    post = Mock(side_effect=(partial, complete))
+    monkeypatch.setattr(openrouter.requests, "post", post)
+    costs = []
+
+    openrouter.chat("secret", "model", [], on_cost=costs.append)
+
+    # Each attempt's charge is reported once, and every request asks for usage.
+    assert costs == [0.002, 0.003]
+    assert all(call.kwargs["json"]["usage"] == {"include": True} for call in post.call_args_list)
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"cost": None}, {"cost": True}, {"cost": -1.0}])
+def test_chat_skips_missing_or_invalid_costs(monkeypatch, usage):
+    """Never report an absent or impossible charge as a real (or zero) cost."""
+    payload = {"choices": [{"message": {"content": "Done"}, "finish_reason": "stop"}]}
+    if usage is not None:
+        # Each case supplies one malformed usage shape alongside a valid reply.
+        payload["usage"] = usage
+    monkeypatch.setattr(openrouter.requests, "post", Mock(return_value=_response(payload)))
+    costs = []
+
+    openrouter.chat("secret", "model", [], on_cost=costs.append)
+
+    # The callback stays silent, so callers treat the charge as unknown.
+    assert costs == []

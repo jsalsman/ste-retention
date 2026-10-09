@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from ste.costs import estimate_run_cost
 from ste.models.openrouter import MAX_CONTINUATIONS
 from ste.protocol import PROTOCOL_VERSION, SCHEMA_VERSION, SCORING_VERSION, VARIANTS
 from ste.runs.backend import (
@@ -337,12 +338,40 @@ def _load_research_run(path: Path) -> dict:
     return state
 
 
+def _complete_run_cost(state: dict) -> float | None:
+    """Return a run's total provider charge only when every paid attempt was priced.
+
+    Args:
+        state: A validated research snapshot.
+
+    Returns:
+        The finite, non-negative US-dollar total, or ``None`` when the snapshot
+        predates cost tracking or any paid attempt lacks a reported charge.
+
+    """
+    cost = state.get("provider_cost_usd")
+    costed = state.get("costed_request_attempts")
+    paid = state.get("paid_request_attempts")
+    # Integer counters must agree exactly; a gap means at least one unknown charge.
+    if type(costed) is not int or type(paid) is not int or costed != paid or paid < 0:
+        return None
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return None
+    # Non-finite or negative totals are damaged data, never a displayable cost.
+    return float(cost) if math.isfinite(cost) and cost >= 0 else None
+
+
 def completed_records(directory: Path) -> list[dict]:
-    """Collect completed records with safe parent-run timing metadata for the leaderboard.
+    """Collect completed records with safe parent-run timing and cost metadata.
 
     The elapsed value is wall-clock time from snapshot creation through its final
     completed write. It can include pauses before a resumed run, so the leaderboard
     labels it as elapsed rather than claiming it is provider execution time.
+
+    The cost value is the sum of OpenRouter's reported charges. It is exported only
+    when every paid request attempt has a reported charge; runs from before cost
+    tracking, or with an unpriced attempt, instead export an estimate from their saved
+    request text, flagged with ``_run_cost_estimated`` so it is never shown as exact.
     """
     if not directory.is_dir():
         return []
@@ -373,10 +402,26 @@ def completed_records(directory: Path) -> list[dict]:
                 not math.isfinite(elapsed_seconds) or elapsed_seconds < 0
             ):
                 elapsed_seconds = None
+            run_cost = _complete_run_cost(state)
+            # Fall back to a labelled estimate when no exact reported total exists.
+            cost_estimated = run_cost is None
+            if cost_estimated:
+                try:
+                    run_cost = estimate_run_cost(state)
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    # Saved units are not schema-validated, so damaged ones must
+                    # only make this run's cost unavailable, never the leaderboard.
+                    run_cost = None
             for record in state["records"]:
                 # Copy records so display-only metadata never mutates persisted state.
                 exported = {**record}
                 if elapsed_seconds is not None:
                     exported["_run_elapsed_seconds"] = elapsed_seconds
+                if run_cost is not None:
+                    # Every record carries its parent run's total; the leaderboard
+                    # deduplicates by run so repeated records never inflate it.
+                    exported["_run_cost_usd"] = run_cost
+                    if cost_estimated:
+                        exported["_run_cost_estimated"] = True
                 records.append(exported)
     return records
