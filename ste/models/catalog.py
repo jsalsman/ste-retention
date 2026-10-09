@@ -38,7 +38,7 @@ class ModelSpec:
 
 # Date when every identifier and price below matched OpenRouter's live catalog.
 # Update it whenever the catalog is re-verified, because prices can change.
-PRICES_VERIFIED_ON = "2026-10-07"
+PRICES_VERIFIED_ON = "2026-10-09"
 
 # Selectable models in menu order; the first entry is the default selection.
 # Exact identifiers (never moving aliases) keep experiment records reproducible,
@@ -53,7 +53,9 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec("anthropic/claude-haiku-5.5", "Claude Haiku 5.5", 0.0000001, 0.0000005),
     ModelSpec("meta-llama/llama-4-maverick", "Llama 4 Maverick", 0.0000001875, 0.0000006525),
     # Dated DeepSeek release, preferred over the moving ~deepseek-v4-flash-latest alias.
-    ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 0.000000018, 0.00000128),
+    ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 4.6e-9, 0.00000128),
+    # Exact V4.1 identifier, preferred over the moving ~deepseek/deepseek-flash-latest alias.
+    ModelSpec("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 0.0000003, 0.0000012),
     # Free variants have zero token prices but stricter provider request limits.
     ModelSpec("nvidia/nemotron-3-ultra-550b-a55b:free", "Nemotron 3 Ultra (free)", 0.0, 0.0),
     ModelSpec("nvidia/nemotron-3.5-lightning:free", "Nemotron 3.5 Lightning (free)", 0.0, 0.0),

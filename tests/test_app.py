@@ -651,8 +651,20 @@ def test_deepseek_v4_flash_is_a_pinned_paid_choice():
     # The dated identifier is selectable; the moving alias is not.
     assert spec.id in ALLOWED_MODELS
     assert "~deepseek/deepseek-v4-flash-latest" not in ALLOWED_MODELS
-    # Prices match the 2026-10-07 OpenRouter catalog, so it is a paid model.
-    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.000000018, 0.00000128)
+    # Prices match the 2026-10-09 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000000046, 0.00000128)
+    assert not spec.free
+
+
+def test_deepseek_v4_1_flash_is_a_pinned_paid_choice():
+    """Offer the exact DeepSeek V4.1 Flash identifier at its verified catalog price."""
+    spec = MODELS_BY_ID["deepseek/deepseek-v4.1-flash"]
+    # The exact identifier is selectable; the moving alias and batch variant are not.
+    assert spec.id in ALLOWED_MODELS
+    assert "~deepseek/deepseek-flash-latest" not in ALLOWED_MODELS
+    assert "deepseek/deepseek-v4.1-flash:batch" not in ALLOWED_MODELS
+    # Prices match the 2026-10-09 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000003, 0.0000012)
     assert not spec.free
 
 
