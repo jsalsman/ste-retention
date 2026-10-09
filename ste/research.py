@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import random
 from collections.abc import Callable, Iterator
@@ -137,6 +138,10 @@ def new_state(config: ResearchConfig, run_id: str | None = None) -> dict:
         "records": [],
         # Paid attempts are durable separately because incomplete units have no record.
         "paid_request_attempts": 0,
+        # Provider-reported charges; the total is complete only when every paid
+        # attempt has a reported cost, i.e. both counters are equal.
+        "provider_cost_usd": 0.0,
+        "costed_request_attempts": 0,
     }
 
 
@@ -188,6 +193,21 @@ def parse_state(contents: str | bytes, config: ResearchConfig, run_id: str) -> d
     if type(paid_attempts) is not int or not 0 <= paid_attempts <= maximum_attempts:
         # Never resume state that can bypass or has already exceeded its paid ceiling.
         raise ValueError("The research snapshot has invalid paid-request accounting.")
+    cost = state.get("provider_cost_usd")
+    costed = state.get("costed_request_attempts")
+    valid_cost = (
+        not isinstance(cost, bool)
+        and isinstance(cost, (int, float))
+        and math.isfinite(cost)
+        and cost >= 0
+        and type(costed) is int
+        and 0 <= costed <= paid_attempts
+    )
+    if not valid_cost:
+        # Snapshots from before cost tracking, or with damaged totals, still resume,
+        # but they stop tracking cost so the leaderboard shows it as unavailable.
+        state.pop("provider_cost_usd", None)
+        state.pop("costed_request_attempts", None)
     return state
 
 
@@ -231,6 +251,20 @@ def run_research(
         # This checkpoint contains no credential and precedes the external request.
         persist(state)
 
+    def account_cost(cost: float) -> None:
+        """Add one provider-reported charge to the run's cost total.
+
+        The total is persisted with the next checkpoint. Snapshots that predate
+        cost tracking lack the counters and are left untouched, so a resumed
+        legacy run never claims a total that omits its earlier requests.
+        """
+        if "provider_cost_usd" not in state or "costed_request_attempts" not in state:
+            # Earlier requests have unknown charges, so no total can be complete.
+            return
+        state["provider_cost_usd"] += cost
+        # Matching this count to paid attempts proves every request was priced.
+        state["costed_request_attempts"] += 1
+
     for model in config.models:
         for session in range(1, config.sessions + 1):
             session_id = f"{model}:{session}"
@@ -258,6 +292,7 @@ def run_research(
                             timeout=config.provider_timeout,
                             max_tokens=config.max_tokens,
                             on_attempt=account_attempt,
+                            on_cost=account_cost,
                         )
                         unit = {
                             "unit_id": unit_id,
@@ -302,6 +337,7 @@ def run_research(
                                 # truncating valid provider wrappers before their stop.
                                 max_tokens=256,
                                 on_attempt=account_attempt,
+                                on_cost=account_cost,
                             )
                             judge_value = parse_judge_score(raw)
                             judge_unit = {
