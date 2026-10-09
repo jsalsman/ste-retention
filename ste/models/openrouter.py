@@ -108,6 +108,7 @@ def _mentions_key_limit(response: Any) -> bool:
         text = response.text[:2000]
     except Exception:  # noqa: BLE001
         return False
+    # Case-insensitive matching tolerates small wording changes in OpenRouter's reply.
     return isinstance(text, str) and KEY_LIMIT_PHRASE in text.lower()
 
 

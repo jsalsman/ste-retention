@@ -69,6 +69,7 @@ def _clear_stop(state: dict) -> None:
     """Remove a previous stop reason when a run starts or resumes."""
     # A running or completed run must not show the reason for an earlier stop.
     state.pop("stop_reason", None)
+    # The timestamp belongs to that earlier stop, so it is removed with the reason.
     state.pop("stopped_at", None)
 
 
