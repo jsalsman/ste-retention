@@ -3,9 +3,9 @@
 A run's wall-clock span includes any time it sat stalled before being resumed,
 which can be hours. Every saved work unit records ``completed_at``, so the time
 the run actually spent working is the sum of the gaps between consecutive
-saves. A gap longer than one unit could possibly take is a pause; it is counted
-as one typical unit (the median ordinary gap), because the first unit after a
-resume still had to be generated.
+saves. A gap longer than the unit that ended it could possibly take is a pause;
+it is counted as one typical unit (the median ordinary gap), because the first
+unit after a resume still had to be generated.
 """
 
 import math
@@ -16,37 +16,60 @@ from datetime import datetime
 # a pause. It covers checkpoint writes, lease renewal and request start-up.
 PAUSE_MARGIN_SECONDS = 60.0
 
-# The limit used when a snapshot does not record its timeouts.
+# The per-unit time limit used when a snapshot does not record a usable one. It
+# matches the research runner's default provider and judge timeouts.
 DEFAULT_UNIT_LIMIT_SECONDS = 120.0
 
 
 def _timestamp(value: object) -> datetime | None:
-    """Parse one saved ISO timestamp, or return ``None`` when it is unusable."""
+    """Parse one saved ISO timestamp, or return ``None`` when it is unusable.
+
+    Args:
+        value: A ``created_at`` or ``completed_at`` value read from a snapshot.
+
+    Returns:
+        A timezone-aware datetime, or ``None`` for non-strings, unparseable text,
+        and naive timestamps.
+
+    """
     if not isinstance(value, str):
+        # Missing or non-text values cannot anchor a timeline.
         return None
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError:
+        # Malformed text is treated like a missing timestamp.
         return None
     # Naive values cannot be compared with timezone-aware ones, so they are unusable.
     return parsed if parsed.tzinfo is not None else None
 
 
-def _unit_limit(state: dict) -> float:
-    """Return the longest time one work unit can legitimately take, in seconds."""
-    config = state.get("config")
-    limits = []
-    for key in ("provider_timeout", "judge_timeout"):
-        value = config.get(key) if isinstance(config, dict) else None
-        # Only finite positive numbers are real limits; anything else is ignored.
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if math.isfinite(value) and value > 0:
-                limits.append(float(value))
-    return max(limits, default=DEFAULT_UNIT_LIMIT_SECONDS)
+def _limit(config: object, key: str) -> float:
+    """Return one configured per-unit time limit, or the default when unusable.
+
+    Args:
+        config: The snapshot's ``config`` mapping, if any.
+        key: ``"provider_timeout"`` for generations or ``"judge_timeout"`` for judges.
+
+    Returns:
+        The configured finite positive limit in seconds, else the default.
+
+    """
+    value = config.get(key) if isinstance(config, dict) else None
+    # Booleans are numbers in Python, but never a meaningful time limit.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        # Only finite positive numbers are real limits.
+        if math.isfinite(value) and value > 0:
+            return float(value)
+    return DEFAULT_UNIT_LIMIT_SECONDS
 
 
 def active_run_seconds(state: dict) -> float | None:
     """Return the seconds a research run spent working, excluding stalled pauses.
+
+    Each gap ends with one saved unit. A judge unit may take up to the judge
+    timeout and any other unit up to the provider timeout; a gap longer than that
+    limit plus :data:`PAUSE_MARGIN_SECONDS` is a pause.
 
     Args:
         state: A validated research snapshot with ``created_at`` and saved units.
@@ -59,21 +82,28 @@ def active_run_seconds(state: dict) -> float | None:
     units = state.get("units")
     start = _timestamp(state.get("created_at"))
     if start is None or not isinstance(units, list) or not units:
+        # Without a start and saved units there is no timeline to measure.
         return None
-    times = []
+    config = state.get("config")
+    generation_limit = _limit(config, "provider_timeout")
+    judge_limit = _limit(config, "judge_timeout")
+    previous = start
+    gaps: list[tuple[float, float]] = []
     for unit in units:
         stamp = _timestamp(unit.get("completed_at") if isinstance(unit, dict) else None)
         if stamp is None:
             # One unusable timestamp makes the reconstruction untrustworthy.
             return None
-        times.append(stamp)
-    # Units are appended as they are saved, so their times must never go backwards.
-    pairs = zip([start, *times[:-1]], times, strict=True)
-    gaps = [(later - earlier).total_seconds() for earlier, later in pairs]
-    if any(not math.isfinite(gap) or gap < 0 for gap in gaps):
-        return None
-    pause_after = _unit_limit(state) + PAUSE_MARGIN_SECONDS
-    ordinary = [gap for gap in gaps if gap <= pause_after]
+        gap = (stamp - previous).total_seconds()
+        # Units are appended as they are saved, so their times never go backwards.
+        if not math.isfinite(gap) or gap < 0:
+            return None
+        is_judge = isinstance(unit, dict) and unit.get("kind") == "judge"
+        # The unit that ended the gap decides how long its work could have taken.
+        limit = judge_limit if is_judge else generation_limit
+        gaps.append((gap, limit + PAUSE_MARGIN_SECONDS))
+        previous = stamp
+    ordinary = [gap for gap, pause_after in gaps if gap <= pause_after]
     # A pause still contains one unit's real work, estimated as a typical unit.
-    typical = statistics.median(ordinary) if ordinary else pause_after
-    return sum(gap if gap <= pause_after else typical for gap in gaps)
+    typical = statistics.median(ordinary) if ordinary else generation_limit
+    return sum(gap if gap <= pause_after else typical for gap, pause_after in gaps)

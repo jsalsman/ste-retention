@@ -9,15 +9,18 @@ from ste.runs.runtime import PAUSE_MARGIN_SECONDS, active_run_seconds
 START = datetime(2026, 10, 9, 1, 44, tzinfo=timezone.utc)
 
 
-def _state(offsets, provider_timeout=120.0):
+def _state(offsets, provider_timeout=120.0, judge_timeout=120.0, kinds=None):
     """Build a snapshot whose units were saved at the given second offsets."""
+    # Units default to generations; tests name judge units explicitly.
+    kinds = kinds or ["generation"] * len(offsets)
     units = [
-        {"completed_at": (START + timedelta(seconds=offset)).isoformat()} for offset in offsets
+        {"kind": kind, "completed_at": (START + timedelta(seconds=offset)).isoformat()}
+        for offset, kind in zip(offsets, kinds, strict=True)
     ]
     # Only the fields the reconstruction reads are needed.
     return {
         "created_at": START.isoformat(),
-        "config": {"provider_timeout": provider_timeout, "judge_timeout": 120.0},
+        "config": {"provider_timeout": provider_timeout, "judge_timeout": judge_timeout},
         "units": units,
     }
 
@@ -52,3 +55,15 @@ def test_slow_but_legitimate_unit_is_not_a_pause():
 def test_unusable_timelines_are_unavailable(state):
     """Return None for no units, bad or naive timestamps, or saves out of order."""
     assert active_run_seconds(state) is None
+
+
+def test_each_gap_uses_the_time_limit_of_the_unit_that_ended_it():
+    """Judge the pause threshold by unit kind, not by the larger of the two limits."""
+    # A long judge timeout must not hide a 30-minute stall before a generation.
+    stalled_generation = _state([10, 20, 20 + 1800], judge_timeout=3600.0)
+    assert active_run_seconds(stalled_generation) == pytest.approx(10 + 10 + 10)
+    # The same gap ending in a judge unit is within that unit's own limit.
+    slow_judge = _state(
+        [10, 20, 20 + 1800], judge_timeout=3600.0, kinds=["generation", "generation", "judge"]
+    )
+    assert active_run_seconds(slow_judge) == pytest.approx(20 + 1800)
