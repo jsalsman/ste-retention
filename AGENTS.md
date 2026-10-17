@@ -16,6 +16,8 @@
 - Bound preview web work below the deployment request timeout with a safety margin.
 - The web form can stream the full `ste.research` study. Keep it resumable because request timeouts can interrupt it. Recommend a Cloud Run Job for unattended studies.
 - Escape external leaderboard values and validate every numeric chart or SVG input.
+- The leaderboard's Run time is active time from `ste/runs/runtime.py`, summed from unit save times with stalled pauses replaced by a typical unit; never show wall-clock spans that include time a run sat stalled.
+- For models with time-of-day pricing (currently DeepSeek V4.1), store the peak rate from OpenRouter's `pricing.overrides`, not the base price, which changes with the hour.
 - The leaderboard's last column is Total cost: OpenRouter's reported `usage.cost`, summed per run in `provider_cost_usd`. It is exact only when `costed_request_attempts` equals `paid_request_attempts`; otherwise `ste/costs.py` estimates the run from its saved text and the row must say "(estimated)". Show "Unavailable" when any run can be neither priced nor estimated, and never add a partial reported total to a snapshot that predates cost tracking.
 - The leaderboard dumbbell chart passes every coordinate through `_chart_x`, which validates and clamps it; keep the table as the exact data view, and write table intervals as `mean ± half-width` with the notation stated once in the headers and explained in the uncertainty section.
 - Preserve keyboard operation, semantic labels, live status, contrast, and reduced-motion support.
@@ -31,7 +33,7 @@
 - Heartbeat immediately before exception or cancellation cleanup writes. Snapshot generation fencing alone does not prove lease ownership during the gap between an expired takeover and the successor's first write.
 - Verify selectable models against OpenRouter's live catalog, and prefer exact model identifiers over moving aliases so experiment records remain reproducible.
 - `ste/models/catalog.py` is the only place that lists selectable model identifiers, labels, and prices. Server validation derives `ALLOWED_MODELS` from it, and the browser builds its menu and cost estimate from `GET /api/models`; never duplicate identifiers or prices in markup, script, or other modules.
-- Selectable models include `openai/gpt-5.6-luna`, `anthropic/claude-haiku-4.5`, `anthropic/claude-haiku-5.5`, `deepseek/deepseek-v4-flash-0731`, `deepseek/deepseek-v4.1-flash`, and six zero-priced `:free` variants, verified with the model-price catalog on 2026-10-09; historical persisted model labels must remain unchanged.
+- Selectable models include `openai/gpt-5.6-luna`, `openai/gpt-6-luna`, `anthropic/claude-haiku-4.5`, `anthropic/claude-haiku-5.5`, `deepseek/deepseek-v4-flash-0731`, `deepseek/deepseek-v4.1-flash`, `deepseek/deepseek-v4.1-flash-1017`, and six zero-priced `:free` variants, verified with the model-price catalog on 2026-10-17; historical persisted model labels must remain unchanged.
 - Free variants are rate limited by OpenRouter; show rate-limit guidance instead of a dollar range for them, and keep studies on them resumable.
 - Treat only an explicit OpenRouter `stop` as a complete text generation. Bounded continuation text may be shown diagnostically, but experiments must not score or checkpoint it until a stop is received.
 - Distinguish checkpointed logical work units from paid provider requests in every workload display. Apply safety ceilings to the worst-case request count, including all bounded continuation attempts.

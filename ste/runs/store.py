@@ -19,6 +19,7 @@ from ste.runs.backend import (
     read_blob,
 )
 from ste.runs.lease import RunActiveError
+from ste.runs.runtime import active_run_seconds
 
 # Run identifiers are deliberately narrow because they become file names below.
 RUN_ID = re.compile(r"^[a-f0-9]{32}$")
@@ -364,9 +365,9 @@ def _complete_run_cost(state: dict) -> float | None:
 def completed_records(directory: Path) -> list[dict]:
     """Collect completed records with safe parent-run timing and cost metadata.
 
-    The elapsed value is wall-clock time from snapshot creation through its final
-    completed write. It can include pauses before a resumed run, so the leaderboard
-    labels it as elapsed rather than claiming it is provider execution time.
+    The run time is active working time reconstructed from each saved unit's
+    ``completed_at`` by :func:`active_run_seconds`, so hours a run spent stalled
+    before being resumed are not counted.
 
     The cost value is the sum of OpenRouter's reported charges. It is exported only
     when every paid request attempt has a reported charge; runs from before cost
@@ -388,20 +389,8 @@ def completed_records(directory: Path) -> list[dict]:
             # One damaged run must not make all valid leaderboard data unavailable.
             continue
         if state["status"] == "complete" and state.get("run_mode") == "research":
-            try:
-                # Snapshot timestamps are authoritative for the complete run and include
-                # work before the first scored record, unlike record timestamps alone.
-                created = datetime.fromisoformat(state["created_at"])
-                updated = datetime.fromisoformat(state["updated_at"])
-                elapsed_seconds = (updated - created).total_seconds()
-            except (KeyError, TypeError, ValueError):
-                # Historical snapshots without usable bounds remain publishable; their
-                # runtime is explicitly shown as unavailable instead of being guessed.
-                elapsed_seconds = None
-            if elapsed_seconds is not None and (
-                not math.isfinite(elapsed_seconds) or elapsed_seconds < 0
-            ):
-                elapsed_seconds = None
+            # Unit save times exclude stalls; runs without usable ones show unavailable.
+            active_seconds = active_run_seconds(state)
             run_cost = _complete_run_cost(state)
             # Fall back to a labelled estimate when no exact reported total exists.
             cost_estimated = run_cost is None
@@ -415,8 +404,8 @@ def completed_records(directory: Path) -> list[dict]:
             for record in state["records"]:
                 # Copy records so display-only metadata never mutates persisted state.
                 exported = {**record}
-                if elapsed_seconds is not None:
-                    exported["_run_elapsed_seconds"] = elapsed_seconds
+                if active_seconds is not None:
+                    exported["_run_active_seconds"] = active_seconds
                 if run_cost is not None:
                     # Every record carries its parent run's total; the leaderboard
                     # deduplicates by run so repeated records never inflate it.

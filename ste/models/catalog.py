@@ -38,7 +38,7 @@ class ModelSpec:
 
 # Date when every identifier and price below matched OpenRouter's live catalog.
 # Update it whenever the catalog is re-verified, because prices can change.
-PRICES_VERIFIED_ON = "2026-10-09"
+PRICES_VERIFIED_ON = "2026-10-17"
 
 # Selectable models in menu order; the first entry is the default selection.
 # Exact identifiers (never moving aliases) keep experiment records reproducible,
@@ -46,16 +46,23 @@ PRICES_VERIFIED_ON = "2026-10-09"
 # The ``:free`` variants are zero-priced but rate limited by OpenRouter.
 MODEL_CATALOG: tuple[ModelSpec, ...] = (
     # Paid models, verified with the model-price catalog on PRICES_VERIFIED_ON.
-    ModelSpec("google/gemini-3.8-flash", "Gemini 3.8 Flash", 0.00000075, 0.00000375),
+    ModelSpec("google/gemini-3.8-flash", "Gemini 3.8 Flash", 0.000000825, 0.000004125),
     ModelSpec("openai/gpt-5.6-luna", "GPT-5.6 Luna", 0.0000002, 0.0000012),
+    # Exact identifier, preferred over the moving ~openai/gpt-luna-latest alias.
+    ModelSpec("openai/gpt-6-luna", "GPT-6 Luna", 0.0000001, 0.0000005),
     ModelSpec("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", 0.000001, 0.000005),
     # Exact identifier, preferred over the moving ~anthropic/claude-haiku-latest alias.
     ModelSpec("anthropic/claude-haiku-5.5", "Claude Haiku 5.5", 0.0000001, 0.0000005),
     ModelSpec("meta-llama/llama-4-maverick", "Llama 4 Maverick", 0.0000001875, 0.0000006525),
     # Dated DeepSeek release, preferred over the moving ~deepseek-v4-flash-latest alias.
-    ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 4.6e-9, 0.00000128),
+    # Its tiny input price moves often; the output price dominates its cost.
+    ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 5.8e-9, 0.00000128),
+    # DeepSeek V4.1 prices double on weekdays 01:00-04:00 and 06:00-10:00 UTC. The
+    # peak rate is stored so estimates are an upper bound; off-peak runs cost half.
     # Exact V4.1 identifier, preferred over the moving ~deepseek/deepseek-flash-latest alias.
     ModelSpec("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 0.0000003, 0.0000012),
+    # Dated V4.1 revision released 2026-10-17, stored at the same peak rate.
+    ModelSpec("deepseek/deepseek-v4.1-flash-1017", "DeepSeek V4.1 Flash 1017", 3e-7, 1.2e-6),
     # Free variants have zero token prices but stricter provider request limits.
     ModelSpec("nvidia/nemotron-3-ultra-550b-a55b:free", "Nemotron 3 Ultra (free)", 0.0, 0.0),
     ModelSpec("nvidia/nemotron-3.5-lightning:free", "Nemotron 3.5 Lightning (free)", 0.0, 0.0),

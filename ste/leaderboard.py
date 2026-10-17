@@ -89,7 +89,7 @@ def _estimate_cell(summary: tuple[float, float | None, float | None], *, signed:
 
 
 def _elapsed_cell(run_seconds: dict[object, float], expected_runs: set[object]) -> str:
-    """Format total elapsed wall time only when every contributing run has safe metadata."""
+    """Format total active run time only when every contributing run has safe metadata."""
     # Partial timing would understate the workload, so mixed historical/current rows
     # receive the same explicit unavailable treatment as fully historical rows.
     if not expected_runs.issubset(run_seconds):
@@ -268,6 +268,10 @@ def _render_explanation() -> tuple[str, str]:
         # Interaction signs alone do not establish a causal explanation.
         "<p>A negative interaction may reflect overlap between naming the technique and "
         "spelling out its rules, but the interaction does not identify its cause.</p>"
+        # Run time excludes stalls, so say how it is measured.
+        "<p>Run time is the time the row's runs spent working, summed from when each "
+        "answer was saved. Pauses while a run sat stalled before being resumed are not "
+        "counted; each one is replaced by the run's typical time for one answer.</p>"
         # Say what the cost covers and why some rows cannot show one.
         "<p>Total cost is the sum of OpenRouter's reported charges for every paid request "
         "in the row's runs, including continuations and judge calls. Runs from before cost "
@@ -327,7 +331,7 @@ def _render_table(rows: list[str]) -> str:
         "<th>Bare baseline</th><th>Rule effect</th>"
         "<th>Naming effect</th><th>Interaction</th>"
         # Count the independent clustered units rather than the underlying depth cells.
-        "<th>Paired sessions</th><th>Run elapsed</th><th>Total cost</th></tr></thead>"
+        "<th>Paired sessions</th><th>Run time</th><th>Total cost</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
     )
 
@@ -405,7 +409,7 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         # Validate it again because JSONL and direct callers can supply arbitrary records.
         run_elapsed = next(
             (
-                record.get("_run_elapsed_seconds")
+                record.get("_run_active_seconds")
                 for record in records
                 if record.get("run_id") == run_id
             ),
