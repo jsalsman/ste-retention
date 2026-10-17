@@ -651,8 +651,8 @@ def test_deepseek_v4_flash_is_a_pinned_paid_choice():
     # The dated identifier is selectable; the moving alias is not.
     assert spec.id in ALLOWED_MODELS
     assert "~deepseek/deepseek-v4-flash-latest" not in ALLOWED_MODELS
-    # Prices match the 2026-10-09 OpenRouter catalog, so it is a paid model.
-    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000000046, 0.00000128)
+    # Prices match the 2026-10-17 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000000061, 0.00000128)
     assert not spec.free
 
 
@@ -663,8 +663,20 @@ def test_deepseek_v4_1_flash_is_a_pinned_paid_choice():
     assert spec.id in ALLOWED_MODELS
     assert "~deepseek/deepseek-flash-latest" not in ALLOWED_MODELS
     assert "deepseek/deepseek-v4.1-flash:batch" not in ALLOWED_MODELS
-    # Prices match the 2026-10-09 OpenRouter catalog, so it is a paid model.
-    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000003, 0.0000012)
+    # Prices match the 2026-10-17 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.00000015, 0.0000006)
+    assert not spec.free
+
+
+def test_gpt_6_luna_is_a_pinned_paid_choice():
+    """Offer the exact GPT-6 Luna identifier at its verified catalog price."""
+    spec = MODELS_BY_ID["openai/gpt-6-luna"]
+    # The exact identifier is selectable; the moving alias and batch variant are not.
+    assert spec.id in ALLOWED_MODELS
+    assert "~openai/gpt-luna-latest" not in ALLOWED_MODELS
+    assert "openai/gpt-6-luna:batch" not in ALLOWED_MODELS
+    # Prices match the 2026-10-17 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000001, 0.0000005)
     assert not spec.free
 
 
