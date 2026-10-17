@@ -57,14 +57,12 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
     # Dated DeepSeek release, preferred over the moving ~deepseek-v4-flash-latest alias.
     # Its tiny input price moves often; the output price dominates its cost.
     ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 5.8e-9, 0.00000128),
-    # DeepSeek V4.1 prices double on weekdays 01:00-04:00 and 06:00-10:00 UTC; the
-    # off-peak rate stored here applies about 80% of the week.
+    # DeepSeek V4.1 prices double on weekdays 01:00-04:00 and 06:00-10:00 UTC. The
+    # peak rate is stored so estimates are an upper bound; off-peak runs cost half.
     # Exact V4.1 identifier, preferred over the moving ~deepseek/deepseek-flash-latest alias.
-    ModelSpec("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 0.00000015, 0.0000006),
-    # Dated V4.1 revision released 2026-10-17, with the same off-peak and peak rates.
-    ModelSpec(
-        "deepseek/deepseek-v4.1-flash-1017", "DeepSeek V4.1 Flash 1017", 0.00000015, 0.0000006
-    ),
+    ModelSpec("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 0.0000003, 0.0000012),
+    # Dated V4.1 revision released 2026-10-17, stored at the same peak rate.
+    ModelSpec("deepseek/deepseek-v4.1-flash-1017", "DeepSeek V4.1 Flash 1017", 3e-7, 1.2e-6),
     # Free variants have zero token prices but stricter provider request limits.
     ModelSpec("nvidia/nemotron-3-ultra-550b-a55b:free", "Nemotron 3 Ultra (free)", 0.0, 0.0),
     ModelSpec("nvidia/nemotron-3.5-lightning:free", "Nemotron 3.5 Lightning (free)", 0.0, 0.0),

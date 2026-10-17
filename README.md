@@ -161,9 +161,10 @@ zero-priced `:free` variants (Nemotron 3 Ultra, Nemotron 3.5 Lightning,
 Nemotron 3 Super, Inkling, Gemma 4 26B A4B, and Gemma 4 31B). These exact
 OpenRouter model identifiers and prices were verified against the provider
 catalog on 2026-10-17; Qwen3.8 27B (free) was removed on 2026-10-07 because
-OpenRouter no longer lists it. DeepSeek V4.1 models use time-of-day pricing: the
-catalog stores the off-peak rate, which doubles on weekdays from 01:00 to 04:00 and
-06:00 to 10:00 UTC, so a study run then costs more than the estimate. Exact identifiers make a
+OpenRouter no longer lists it. Models with time-of-day pricing, currently the
+DeepSeek V4.1 models, are stored at their peak rate (weekdays 01:00 to 04:00 and
+06:00 to 10:00 UTC), so their estimates are an upper bound; off-peak studies cost
+about half. Exact identifiers make a
 study more reproducible than moving `latest` aliases, but the catalog can change.
 Verify availability before you start a large study.
 
