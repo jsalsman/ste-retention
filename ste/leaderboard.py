@@ -106,13 +106,18 @@ def _elapsed_cell(run_seconds: dict[object, float], expected_runs: set[object]) 
 
 
 def _cost_cell(
-    run_costs: dict[object, float], estimated_runs: set[object], expected_runs: set[object]
+    run_costs: dict[object, float],
+    estimated_runs: set[object],
+    expected_runs: set[object],
+    *,
+    label_estimates: bool = True,
 ) -> str:
     """Format the summed provider cost only when every contributing run has a value.
 
     A row missing any run's cost would understate spending, so it is shown as
-    unavailable, matching how partial elapsed-time data is treated. A row that
-    includes any estimated run cost is labelled "(estimated)" as a whole.
+    unavailable, matching how partial elapsed-time data is treated. In the table, a
+    row that includes any estimated run cost is labelled "(estimated)" as a whole;
+    the chart passes ``label_estimates=False`` to keep its labels short.
     """
     if not expected_runs.issubset(run_costs):
         return "Unavailable"
@@ -120,7 +125,8 @@ def _cost_cell(
     # Cents suffice for most studies; very cheap rows keep four decimals so they
     # do not all read as $0.00.
     amount = f"${total:.2f}" if total == 0 or total >= 0.01 else f"${total:.4f}"
-    return f"{amount} (estimated)" if expected_runs & estimated_runs else amount
+    labelled = label_estimates and expected_runs & estimated_runs
+    return f"{amount} (estimated)" if labelled else amount
 
 
 # Chart geometry is in SVG user units; the viewBox scales it to the container width.
@@ -174,14 +180,16 @@ def _chart_band(summary: tuple[float, float | None, float | None], y: float, css
 
 
 def _render_chart(
-    chart_rows: list[tuple[int, str, tuple, tuple]],
+    chart_rows: list[tuple[int, str, tuple, tuple, str]],
 ) -> str:
     """Return a dumbbell chart linking each row's bare baseline to its named score.
 
-    ``chart_rows`` holds ``(rank, model, named_summary, bare_summary)`` tuples in table
-    order. Each summary is ``(mean, lower, upper)`` from :func:`_mean_interval`. The
-    connecting line shows the named-minus-bare change; translucent bands show each
-    mean's 95% CI. The table below remains the full accessible data view.
+    ``chart_rows`` holds ``(rank, model, named_summary, bare_summary, details)`` tuples
+    in table order, where ``details`` is the row's run time and cost text (possibly
+    empty) shown after the model name. Each summary is ``(mean, lower, upper)`` from
+    :func:`_mean_interval`. The connecting line shows the named-minus-bare change;
+    translucent bands show each mean's 95% CI. The table below remains the full
+    accessible data view.
     """
     if not chart_rows:
         # The table already carries the empty-state message, so no empty axis is drawn.
@@ -198,7 +206,7 @@ def _render_chart(
         for tick in CHART_TICKS
     )
     rows = []
-    for index, (rank, model, named, bare) in enumerate(chart_rows):
+    for index, (rank, model, named, bare, details) in enumerate(chart_rows):
         top = CHART_PAD_TOP + index * CHART_ROW_HEIGHT
         # Label text sits above the dumbbell; model names were escaped by the caller.
         label_y, mark_y = top + 17, top + 36
@@ -206,8 +214,12 @@ def _render_chart(
         # Native SVG titles provide the hover readout without client-side script.
         tooltip = html.escape(
             f"{rank}. {model}: bare {bare[0]:.1f}, named {named[0]:.1f} "
-            f"({named[0] - bare[0]:+.1f})",
+            f"({named[0] - bare[0]:+.1f})" + (f"; {details}" if details else ""),
             quote=False,
+        )
+        # Run time and cost follow the name in a quieter style; the text is escaped too.
+        meta = (
+            f'<tspan class="meta"> · {html.escape(details, quote=False)}</tspan>' if details else ""
         )
         rows.append(
             f'<g class="dumbbell"><title>{tooltip}</title>'
@@ -215,7 +227,7 @@ def _render_chart(
             f'<rect class="hit" x="0" y="{top}" width="{CHART_WIDTH}" '
             f'height="{CHART_ROW_HEIGHT}"/>'
             f'<text class="label" x="{CHART_PAD_X}" y="{label_y}">'
-            f'<tspan class="rank">{rank}.</tspan> {html.escape(model, quote=False)}</text>'
+            f'<tspan class="rank">{rank}.</tspan> {html.escape(model, quote=False)}{meta}</text>'
             # Bands render first so the connector and markers stay crisp above them.
             f"{_chart_band(bare, mark_y - 4, 'bare')}{_chart_band(named, mark_y + 4, 'named')}"
             f'<line class="connector" x1="{bare_x:.2f}" y1="{mark_y}" '
@@ -464,8 +476,19 @@ def render_leaderboard(records: list[dict], *, synthetic: bool = False) -> str:
         cells = [
             _estimate_cell(summary, signed=index > 1) for index, summary in enumerate(summaries)
         ]
+        runs = grouped_runs[group_key]
+        # The chart repeats run time and cost after the name, leaving out unavailable
+        # values and the "(estimated)" label, which the table keeps.
+        details = " · ".join(
+            value
+            for value in (
+                _elapsed_cell(elapsed_by_run, runs),
+                _cost_cell(cost_by_run, estimated_runs, runs, label_estimates=False),
+            )
+            if value != "Unavailable"
+        )
         # The chart receives raw text; it escapes model names itself for SVG output.
-        chart_rows.append((rank, model, summaries[0], summaries[1]))
+        chart_rows.append((rank, model, summaries[0], summaries[1], details))
         rows.append(
             f'<tr data-model="{safe_model}" data-protocol="{safe_protocol}" '
             f'data-scoring="{safe_scoring}">'

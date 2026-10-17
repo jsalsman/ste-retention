@@ -303,3 +303,36 @@ def test_rows_with_any_estimated_run_cost_are_labelled():
 
     assert "<td>$1.50 (estimated)</td></tr>" in rendered
     assert "marked (estimated)" in rendered
+
+
+def test_chart_labels_show_run_time_and_cost_without_estimate_label():
+    """Put run time and cost after the model name, leaving "(estimated)" to the table."""
+    records = []
+    for variant in ("bare", "rules", "named", "named_rules"):
+        record = _arm("estimated-run", variant, 50)
+        # 92 minutes of active time and an estimated cost, as completed_records exports.
+        record["_run_active_seconds"] = 92 * 60
+        record["_run_cost_usd"] = 0.42
+        record["_run_cost_estimated"] = True
+        records.append(record)
+
+    rendered = render_leaderboard(records)
+    chart = rendered[rendered.index('<svg class="dumbbell-chart"') : rendered.index("</svg>")]
+
+    # The chart label carries both values but not the estimate marker.
+    assert '<tspan class="meta"> · 1h 32m · $0.42</tspan>' in chart
+    assert "(estimated)" not in chart
+    # The table remains the exact view and still marks the estimate.
+    assert "<td>$0.42 (estimated)</td>" in rendered
+
+
+def test_chart_labels_leave_out_unavailable_values():
+    """Show no trailing details when a row has neither run time nor cost."""
+    records = [
+        _arm("bare-run", variant, 50) for variant in ("bare", "rules", "named", "named_rules")
+    ]
+
+    chart = render_leaderboard(records)
+    chart = chart[chart.index('<svg class="dumbbell-chart"') : chart.index("</svg>")]
+
+    assert 'class="meta"' not in chart and "Unavailable" not in chart
