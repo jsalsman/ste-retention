@@ -652,7 +652,7 @@ def test_deepseek_v4_flash_is_a_pinned_paid_choice():
     assert spec.id in ALLOWED_MODELS
     assert "~deepseek/deepseek-v4-flash-latest" not in ALLOWED_MODELS
     # Prices match the 2026-10-17 OpenRouter catalog, so it is a paid model.
-    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000000061, 0.00000128)
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.0000000058, 0.00000128)
     assert not spec.free
 
 
@@ -664,6 +664,16 @@ def test_deepseek_v4_1_flash_is_a_pinned_paid_choice():
     assert "~deepseek/deepseek-flash-latest" not in ALLOWED_MODELS
     assert "deepseek/deepseek-v4.1-flash:batch" not in ALLOWED_MODELS
     # Prices match the 2026-10-17 OpenRouter catalog, so it is a paid model.
+    assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.00000015, 0.0000006)
+    assert not spec.free
+
+
+def test_deepseek_v4_1_flash_1017_is_a_pinned_paid_choice():
+    """Offer the dated DeepSeek V4.1 Flash 1017 revision at its off-peak catalog price."""
+    spec = MODELS_BY_ID["deepseek/deepseek-v4.1-flash-1017"]
+    # The dated revision is selectable alongside the undated V4.1 identifier.
+    assert spec.id in ALLOWED_MODELS and "deepseek/deepseek-v4.1-flash" in ALLOWED_MODELS
+    # The stored price is the off-peak rate from the 2026-10-17 OpenRouter catalog.
     assert (spec.input_usd_per_token, spec.output_usd_per_token) == (0.00000015, 0.0000006)
     assert not spec.free
 

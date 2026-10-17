@@ -55,9 +55,16 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
     ModelSpec("anthropic/claude-haiku-5.5", "Claude Haiku 5.5", 0.0000001, 0.0000005),
     ModelSpec("meta-llama/llama-4-maverick", "Llama 4 Maverick", 0.0000001875, 0.0000006525),
     # Dated DeepSeek release, preferred over the moving ~deepseek-v4-flash-latest alias.
-    ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 6.1e-9, 0.00000128),
+    # Its tiny input price moves often; the output price dominates its cost.
+    ModelSpec("deepseek/deepseek-v4-flash-0731", "DeepSeek V4 Flash 0731", 5.8e-9, 0.00000128),
+    # DeepSeek V4.1 prices double on weekdays 01:00-04:00 and 06:00-10:00 UTC; the
+    # off-peak rate stored here applies about 80% of the week.
     # Exact V4.1 identifier, preferred over the moving ~deepseek/deepseek-flash-latest alias.
     ModelSpec("deepseek/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", 0.00000015, 0.0000006),
+    # Dated V4.1 revision released 2026-10-17, with the same off-peak and peak rates.
+    ModelSpec(
+        "deepseek/deepseek-v4.1-flash-1017", "DeepSeek V4.1 Flash 1017", 0.00000015, 0.0000006
+    ),
     # Free variants have zero token prices but stricter provider request limits.
     ModelSpec("nvidia/nemotron-3-ultra-550b-a55b:free", "Nemotron 3 Ultra (free)", 0.0, 0.0),
     ModelSpec("nvidia/nemotron-3.5-lightning:free", "Nemotron 3.5 Lightning (free)", 0.0, 0.0),

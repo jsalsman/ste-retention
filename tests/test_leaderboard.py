@@ -188,7 +188,7 @@ def test_rows_rank_by_named_score_without_rules_and_show_runtime():
         ):
             record = _arm(run_id, variant, score)
             record["model"] = model
-            record["_run_elapsed_seconds"] = elapsed
+            record["_run_active_seconds"] = elapsed
             records.append(record)
 
     rendered = render_leaderboard(records)
@@ -268,7 +268,7 @@ def test_total_cost_column_sums_runs_once_and_hides_partial_totals():
     rendered = render_leaderboard(records)
 
     # The new column is last, and its definition appears in the explanation.
-    assert "<th>Run elapsed</th><th>Total cost</th></tr>" in rendered
+    assert "<th>Run time</th><th>Total cost</th></tr>" in rendered
     assert "Total cost is the sum of OpenRouter's reported charges" in rendered
     priced = rendered[rendered.index('data-model="priced"') :].split("</tr>")[0]
     mixed = rendered[rendered.index('data-model="mixed"') :].split("</tr>")[0]
