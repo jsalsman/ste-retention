@@ -105,6 +105,7 @@ button.secondary { background:#5d6872; } button:disabled { cursor:not-allowed; o
 .dumbbell-chart .tick { fill:var(--muted); font-size:13px; }
 .dumbbell-chart .label { fill:#dbe7f2; font-size:14px; font-weight:600; }
 .dumbbell-chart .rank { fill:var(--muted); font-weight:400; }
+.dumbbell-chart .meta { fill:var(--muted); font-weight:400; }
 .dumbbell-chart .hit { fill:transparent; }
 .dumbbell-chart .dumbbell:hover .hit { fill:rgb(94 234 212 / 5%); }
 .dumbbell-chart .band { opacity:.38; }
